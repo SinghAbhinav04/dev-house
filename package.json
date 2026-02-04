@@ -1,0 +1,56 @@
+{
+  "name": "hackeroom",
+  "version": "0.4.3",
+  "description": "Give Claude Code a dev team: members you create, on the models you choose, with their own roles, skills and permissions.",
+  "author": "Abhinav Singh <heysinghabhinav@gmail.com>",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SinghAbhinav04/dev-house.git"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "test:runner": "node --experimental-strip-types scripts/test-runner.mjs",
+    "test:hook": "node scripts/test-hook-contract.mjs",
+    "test:signals": "node --experimental-strip-types scripts/test-structured-output-parser.mjs",
+    "test:runtime": "node --experimental-strip-types scripts/test-pipeline-runtime.mjs",
+    "test:planning": "node --experimental-strip-types scripts/test-pipeline-planning.mjs",
+    "test:supervisor": "node --experimental-strip-types scripts/test-supervisor-snapshot.mjs",
+    "test:supervisor-concept": "node --experimental-strip-types scripts/test-supervisor-concept.mjs",
+    "test:supervisor-intents": "node --experimental-strip-types scripts/test-supervisor-intents.mjs",
+    "test:audit": "node --experimental-strip-types scripts/test-audit-findings.mjs",
+    "test:roster": "node --experimental-strip-types scripts/test-roster.mjs",
+    "test:slots": "node --experimental-strip-types scripts/test-slots.mjs",
+    "team": "node --experimental-strip-types scripts/team.mjs",
+    "test:memory": "node --experimental-strip-types scripts/test-memory.mjs",
+    "test:usage": "node --experimental-strip-types scripts/test-usage.mjs"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.36.0",
+    "lucide-react": "^0.577.0",
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
+    "recharts": "^3.8.0",
+    "remark-breaks": "^4.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "sharp": "^0.34.5",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
