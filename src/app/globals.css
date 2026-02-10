@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+/*
+ * Theme tokens.
+ *
+ * Every colour the UI renders resolves through one of these. The previous
+ * theme block was almost entirely unused — the real interface was built from
+ * a few hundred hardcoded hex values and raw palette utilities, so changing
+ * the look meant editing every file. These are semantic (surface, ink, line,
+ * accent, signal) rather than named colours, so a theme swaps by redefining
+ * the variables and nothing else has to move.
+ *
+ * Themes are applied by setting data-theme on <html>; the :root block below is
+ * the default (Warm Studio).
+ */
+
+@theme inline {
+  /* Surfaces, from furthest back to nearest front. */
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+
+  /* Text, from strongest to faintest. */
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+
+  /* Borders and dividers. */
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  /* Brand accents. */
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-cool: var(--accent-cool);
+
+  /* Status. */
+  --color-signal-ok: var(--signal-ok);
+  --color-signal-warn: var(--signal-warn);
+  --color-signal-bad: var(--signal-bad);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/*
+ * Warm Studio — the default. Warm charcoal and clay rather than the blue-black
+ * and violet it used to be: this is a tool you sit in front of for hours.
+ */
+:root,
+:root[data-theme="warm"] {
+  color-scheme: dark;
+
+  --surface-sunken: #17130f;
+  --surface: #1e1915;
+  --surface-raised: #262019;
+  --surface-overlay: #2f2820;
+
+  --ink: #f4ece2;
+  --ink-soft: #c4b5a5;
+  --ink-faint: #8a7a6b;
+
+  --line: rgba(244, 236, 226, 0.09);
+  --line-strong: rgba(244, 236, 226, 0.18);
+
+  --accent: #d98b4d;
+  --accent-soft: rgba(217, 139, 77, 0.16);
+  --accent-cool: #7fa8a0;
+
+  --signal-ok: #8fae60;
+  --signal-warn: #d9a441;
+  --signal-bad: #cf6c5a;
+}
+
+/* Midnight — the closest thing to the original look, for night work. */
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+
+  --surface-sunken: #0a0a0f;
+  --surface: #111117;
+  --surface-raised: #1a1a22;
+  --surface-overlay: #23232e;
+
+  --ink: #f2f2f6;
+  --ink-soft: #a8a8b8;
+  --ink-faint: #6a6a7c;
+
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.15);
+
+  --accent: #8b7cf6;
+  --accent-soft: rgba(139, 124, 246, 0.16);
+  --accent-cool: #6ba8d8;
+
+  --signal-ok: #4ec27f;
+  --signal-warn: #e0b23c;
+  --signal-bad: #e05f5f;
+}
+
+/* Parchment — light, for daylight and for screenshots. */
+:root[data-theme="parchment"] {
+  color-scheme: light;
+
+  --surface-sunken: #ece4d8;
+  --surface: #f6f0e6;
+  --surface-raised: #fdf9f2;
+  --surface-overlay: #ffffff;
+
+  --ink: #2b2118;
+  --ink-soft: #5c4d3f;
+  --ink-faint: #93826f;
+
+  --line: rgba(43, 33, 24, 0.12);
+  --line-strong: rgba(43, 33, 24, 0.22);
+
+  --accent: #b4682c;
+  --accent-soft: rgba(180, 104, 44, 0.14);
+  --accent-cool: #4a7a72;
+
+  --signal-ok: #5c7f33;
+  --signal-warn: #a8761a;
+  --signal-bad: #b04a38;
+}
+
+body {
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
+}
+
+/* Respect users who would rather things held still. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
