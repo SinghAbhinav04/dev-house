@@ -9,6 +9,12 @@ watch the whole thing happen in an office.
 
 There is no built-in squad. The team is whoever you hire.
 
+![The office view during a run: six members at their desks, one on the couch, and the run narrating itself underneath](.github/media/demo.gif)
+
+*Hovering a member shows what they are doing, how long the turn has run, and
+what it has cost. There is also a [scripted walkthrough](https://singhabhinav04.github.io/SinghAbhinav04/hackeroom.html)
+if you want the shape of a run without installing anything.*
+
 ---
 
 ## What it actually does
