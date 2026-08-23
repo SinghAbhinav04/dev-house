@@ -510,6 +510,13 @@ function MemberDetail({
   const [tab, setTab] = useState<'settings' | 'role' | 'skills'>('settings');
   const [role, setRoleDraft] = useState(member.role);
   const [roleDirty, setRoleDirty] = useState(false);
+  /**
+   * Removal used to ask through window.confirm(). Once a browser is told to
+   * block dialogs for the page, confirm() returns false without showing
+   * anything, so the button silently did nothing. The question is asked here
+   * instead, where nothing outside the app can suppress it.
+   */
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -692,17 +699,41 @@ function MemberDetail({
               are enforced by the hook, not by the prompt.
             </p>
 
-            <button
-              type="button"
-              onClick={() => {
-                if (confirm(`Remove ${member.name} from the team? Their role and skills are kept on disk.`)) {
-                  onRemove(false);
-                }
-              }}
-              className="mt-4 rounded-md border border-signal-bad/40 px-3 py-1.5 text-xs text-signal-bad transition-colors hover:bg-signal-bad/10"
-            >
-              Remove from team
-            </button>
+            {confirmingRemove ? (
+              <div className="mt-4 rounded-md border border-signal-bad/40 bg-signal-bad/5 p-3">
+                <p className="text-xs text-ink-soft">
+                  Remove <b className="text-ink">{member.name}</b> from the team? Their role and skills are kept on
+                  disk, so hiring them again restores both.
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmingRemove(false);
+                      onRemove(false);
+                    }}
+                    className="rounded-md bg-signal-bad px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:opacity-90"
+                  >
+                    Remove
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingRemove(false)}
+                    className="rounded-md border border-line px-3 py-1.5 text-xs text-ink-soft transition-colors hover:bg-surface-overlay"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingRemove(true)}
+                className="mt-4 rounded-md border border-signal-bad/40 px-3 py-1.5 text-xs text-signal-bad transition-colors hover:bg-signal-bad/10"
+              >
+                Remove from team
+              </button>
+            )}
           </div>
         </div>
       )}
