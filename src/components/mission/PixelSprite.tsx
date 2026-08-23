@@ -48,6 +48,7 @@ export function PixelSprite({
   isWaiting = false,
   facing = 'right',
   carrying = false,
+  laptop = false,
   speech = null,
   title
 }: {
@@ -63,6 +64,8 @@ export function PixelSprite({
   facing?: 'front' | 'left' | 'right' | 'back';
   speech?: string | null;
   carrying?: boolean;
+  /** Working from a couch rather than a desk — draws an open laptop on the lap. */
+  laptop?: boolean;
   scale?: number;
 }) {
   const [frame, setFrame] = useState(0);
@@ -111,7 +114,20 @@ export function PixelSprite({
       backgroundSize: `${SHEET_W}px ${SHEET_H}px`,
       backgroundRepeat: 'no-repeat',
       imageRendering: 'pixelated'
-    }} />{carrying && <motion.div className="absolute z-30" style={{
+    }} />{laptop && <div className="absolute z-30" style={{
+      // Anchored to the sprite frame at lap height. Anchoring it to the bottom
+      // of the wrapper put it on top of the nameplate underneath.
+      left: '50%',
+      top: FRAME_PX * 0.58,
+      transform: 'translateX(-50%)',
+      imageRendering: 'pixelated'
+    }}><div className="h-[9px] w-[20px] rounded-[1px] border border-[#2b2b33] bg-[#1b1d22]"><motion.div className="h-full w-full bg-[#7fd4a8]/70" animate={{
+      opacity: [0.55, 0.85, 0.55]
+    }} transition={{
+      duration: 2.4,
+      repeat: Infinity,
+      ease: 'easeInOut'
+    }} /></div><div className="mx-auto h-[3px] w-[24px] rounded-[1px] border border-[#2b2b33] bg-[#33363d]" /></div>}{carrying && <motion.div className="absolute z-30" style={{
       right: -4,
       top: FRAME_PX * 0.35
     }} animate={{

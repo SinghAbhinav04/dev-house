@@ -66,6 +66,9 @@ export default function PipelinePage() {
   const memberName = (id: string) =>
     id === 'system' ? 'System' : members.find((m) => m.id === id)?.name || id;
 
+  /** A member's own colour, so the feed and the office agree on who is who. */
+  const memberColor = (id: string) => members.find((m) => m.id === id)?.color || '';
+
   const memberRole = (id: string) => {
     const member = members.find((m) => m.id === id);
     if (!member) return '';
@@ -74,18 +77,49 @@ export default function PipelinePage() {
 
   const supervisor = members.find((m) => m.slot === 'supervisor');
   const supervisorId = supervisor?.id || '';
+  const auditor = members.find((m) => m.slot === 'auditor');
+  const auditorId = auditor?.id || '';
   /** Everyone except the supervisor, who gets their own column. */
   const workers = members.filter((m) => m.id !== supervisorId);
 
   /**
-   * Who sits at which desk. The desks are the six workflow slots, so a member
-   * takes a desk by filling that slot; members with no slot are chat-only.
+   * Who sits at which desk, and who has no desk of their own.
+   *
+   * A desk belongs to a slot, so the first member assigned to a slot takes it.
+   * Assigning a second member to the same slot used to silently replace the
+   * first in the office — now the extras become guests, and so do members with
+   * no slot at all, all of whom the scene seats elsewhere in the room.
    */
-  const seats: SeatMap = Object.fromEntries(
-    members
-      .filter((m) => m.slot)
-      .map((m) => [m.slot as keyof SeatMap, { agentId: m.id, name: m.name, color: m.color }])
-  );
+  const seats: SeatMap = {};
+  const guests: Array<{ agentId: string; name: string; color: string }> = [];
+  for (const m of members) {
+    const occupant = { agentId: m.id, name: m.name, color: m.color };
+    const slot = m.slot as keyof SeatMap | null;
+    if (slot && !seats[slot]) seats[slot] = occupant;
+    else guests.push(occupant);
+  }
+
+  /**
+   * Members joined with what they have actually spent and what they are doing
+   * right now. The roster snapshot from /api/team is fetched once, so its
+   * usage and task fields are stale the moment a run starts; the live values
+   * ride the same event stream as everything else on this page.
+   */
+  const officeMembers = members.map((m) => {
+    const spent = state.usage?.byMember?.[m.id];
+    const turn = state.runtime?.activeTurns?.[m.id];
+    return {
+      id: m.id,
+      name: m.name,
+      color: m.color,
+      model: m.model || team.roster.teamModel || '',
+      billable: spent ? spent.inputTokens + spent.outputTokens + spent.cacheWriteTokens : m.billable,
+      usage: { totalCostUsd: spent?.totalCostUsd ?? m.usage.totalCostUsd },
+      tokenBudget: m.tokenBudget,
+      currentTask: turn?.currentTask || m.currentTask || agentSpeech(m.id) || '',
+      startedAt: turn?.startedAt || m.startedAt || '',
+    };
+  });
 
 
   const [selectedAgent, setSelectedAgent] = useState<AgentId>('');
@@ -215,12 +249,12 @@ export default function PipelinePage() {
     await resetState();
     setPipelineStarted(false);
     completionNotifiedRef.current = false;
-    setSelectedAgent('S');
+    setSelectedAgent(supervisorId);
     setExpandedAgent(null);
     setChatInput('');
     setShowPlan(false);
     setPlanContent(null);
-    setPanelInputs({ A: '', B: '', C: '', D: '' });
+    setPanelInputs({});
   }
 
   async function handlePanelSend(id: AgentId) {
@@ -355,7 +389,8 @@ export default function PipelinePage() {
               latestSpeech={Object.fromEntries(members.map((m) => [m.id, agentSpeech(m.id)]))}
               runFinalAudit={activeRunFinalAudit}
               seats={seats}
-              members={members}
+              guests={guests}
+              members={officeMembers}
               onAgentClick={(id) => { setSelectedAgent(id); setExpandedAgent(id); }}
             />
           </div>
@@ -377,17 +412,17 @@ export default function PipelinePage() {
               )}
               {state.events.map((e, i) => (
                 <div key={i} className="flex gap-2 py-[2px] text-[11px] leading-relaxed">
-                  <span className="flex-shrink-0 text-ink-faint">
+                  <span className="flex-shrink-0 tabular-nums text-ink-faint">
                     {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
-                  <span className={`flex-shrink-0 w-[18px] font-bold ${
-                    e.agent === 'A' ? 'text-accent' :
-                    e.agent === 'B' ? 'text-accent-cool' :
-                    e.agent === 'C' ? 'text-signal-warn' :
-                    e.agent === 'D' ? 'text-signal-bad' :
-                    e.agent === 'S' ? 'text-signal-ok' :
-                    'text-ink-faint'
-                  }`}>{e.agent === 'system' ? '--' : e.agent}</span>
+                  {/* Member ids are user-authored and any length, so this column
+                      is a fixed width that truncates. It used to be 18px wide
+                      with no truncation, which laid "sukuna" over the message. */}
+                  <span
+                    className="w-[68px] flex-shrink-0 truncate font-bold"
+                    style={{ color: memberColor(e.agent) || 'var(--ink-faint)' }}
+                    title={e.agent === 'system' ? 'System' : memberName(e.agent)}
+                  >{e.agent === 'system' ? '--' : memberName(e.agent)}</span>
                   <div className={`min-w-0 ${
                     e.type === 'approval' ? 'font-bold text-signal-ok' :
                     e.type === 'question' ? 'text-accent' :
@@ -694,13 +729,10 @@ export default function PipelinePage() {
                 <div>
                   <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-faint">Last Action</div>
                   <div className="truncate rounded-lg bg-surface-raised px-3 py-2 font-mono text-[11px]">
-                    <span className={`mr-1.5 font-bold ${
-                      lastAction.agent === 'A' ? 'text-accent' :
-                      lastAction.agent === 'B' ? 'text-accent-cool' :
-                      lastAction.agent === 'C' ? 'text-signal-warn' :
-                      lastAction.agent === 'D' ? 'text-signal-bad' :
-                      'text-signal-ok'
-                    }`}>{lastAction.agent}</span>
+                    <span
+                      className="mr-1.5 font-bold"
+                      style={{ color: memberColor(lastAction.agent) || 'var(--signal-ok)' }}
+                    >{memberName(lastAction.agent)}</span>
                     <span className="text-ink-soft">{lastAction.text}</span>
                   </div>
                 </div>
@@ -835,15 +867,15 @@ export default function PipelinePage() {
         }}
       >
         {/* S — Supervisor, spans both rows */}
-          <div className="flex cursor-pointer flex-col overflow-hidden bg-[var(--surface-sunken)]" style={{ gridRow: '1 / -1' }} onClick={() => setSelectedAgent('S')}>
+          <div className="flex cursor-pointer flex-col overflow-hidden bg-[var(--surface-sunken)]" style={{ gridRow: '1 / -1' }} onClick={() => setSelectedAgent(supervisorId)}>
             <div className="flex items-center gap-3 border-b-2 border-signal-ok px-3.5 py-2.5">
             <div className={`flex h-9 w-9 items-center justify-center rounded-[10px] border-2 text-sm font-bold transition-all ${
-              (state.agentStatus.S === 'active' || state.agentStatus.S === 'working')
+              (state.agentStatus[supervisorId] === 'active' || state.agentStatus[supervisorId] === 'working')
                 ? 'border-signal-ok text-signal-ok shadow-[0_0_16px_rgba(34,197,94,0.25)]'
                 : 'border-[var(--surface-overlay)] text-[var(--ink-faint)]'
-            }`} style={{ background: 'var(--surface)' }}>S</div>
+            }`} style={{ background: 'var(--surface)' }}>{supervisor ? initials(supervisor.name) : '—'}</div>
             <div>
-              <div className="text-[13px] font-semibold text-[var(--ink-soft)]">Supervisor</div>
+              <div className="text-[13px] font-semibold text-[var(--ink-soft)]">{supervisor ? supervisor.name : 'No supervisor'}</div>
               <div className="text-[10px] text-[var(--ink-faint)]">{isPipeline ? 'Recommended front door. Direct specialist chat still works.' : 'Oversight & diagnostics'}</div>
             </div>
             {isPipeline && state.events.some(e => e.text?.includes('plan.md')) && (
@@ -853,8 +885,10 @@ export default function PipelinePage() {
             )}
           </div>
           <div
-            ref={(el) => { panelRefs.current.S = el; }}
-            className="flex-1 space-y-px overflow-y-auto px-2.5 py-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar-thumb]:rounded-sm [&::-webkit-scrollbar-thumb]:bg-[var(--surface-overlay)] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-[3px]"
+            ref={(el) => { panelRefs.current[supervisorId] = el; }}
+            /* min-h-0 is what lets this scroll instead of growing the column
+               until the composer is pushed off the bottom. */
+            className="min-h-0 flex-1 space-y-px overflow-y-auto px-2.5 py-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar-thumb]:rounded-sm [&::-webkit-scrollbar-thumb]:bg-[var(--surface-overlay)] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-[3px]"
           >
             {isPipeline && supervisorUpdate && (
               <div className={`mb-2 rounded border px-2 py-1.5 text-[11px] ${
@@ -871,10 +905,14 @@ export default function PipelinePage() {
                 )}
               </div>
             )}
-            {agentEvents('S').length === 0 && (
-              <p className="pt-16 text-center text-xs tracking-wider text-ink-faint">{isPipeline ? 'Ask S to manage the run, or message any specialist directly.' : 'Chat with any specialist directly. Claude permission prompts still apply in manual mode.'}</p>
+            {agentEvents(supervisorId).length === 0 && (
+              <p className="pt-16 text-center text-xs tracking-wider text-ink-faint">{isPipeline
+                ? supervisor
+                  ? `Ask ${supervisor.name} to manage the run, or message any specialist directly.`
+                  : 'No member is filling the supervisor slot. Assign one on the Team page, or message any specialist directly.'
+                : 'Chat with any specialist directly. Claude permission prompts still apply in manual mode.'}</p>
             )}
-            {agentEvents('S').map((e, i) => (
+            {agentEvents(supervisorId).map((e, i) => (
               <div key={i} className={`rounded px-2 py-1 text-[11px] leading-relaxed ${
                 e.type === 'approval' ? 'font-bold text-signal-ok' :
                 e.type === 'question' ? 'text-accent' :
@@ -1027,29 +1065,29 @@ export default function PipelinePage() {
         })}
 
         {/* E — Security Auditor, spans both rows in the rightmost column. Only rendered once the audit has started. */}
-        {auditHasStarted && (
+        {auditHasStarted && auditorId && (
           <SecurityAuditPanel
             findings={state.auditFindings || []}
-            chatEvents={agentEvents('E' as AgentId)}
+            chatEvents={agentEvents(auditorId)}
             auditActionInFlight={!!state.auditActionInFlight}
             pipelineStatus={state.pipelineStatus}
             currentPhase={state.currentPhase}
             buildComplete={!!state.buildComplete}
-            isSelected={selectedAgent === 'E'}
-            isSending={sendingAgents.has('E' as AgentId)}
-            onSelect={() => { setSelectedAgent('E' as AgentId); setExpandedAgent('E' as AgentId); }}
+            isSelected={selectedAgent === auditorId}
+            isSending={sendingAgents.has(auditorId)}
+            onSelect={() => { setSelectedAgent(auditorId); setExpandedAgent(auditorId); }}
             onSendToC={(id) => { void sendFindingToC(id); }}
             onDismiss={(id) => { void dismissFinding(id); }}
             onDeploy={() => { void deployAfterAudit(); }}
             onSendChat={(msg) => {
-              setSendingAgents((prev) => new Set([...prev, 'E' as AgentId]));
-              void sendChat('E' as AgentId, msg, isPipeline ? {
+              setSendingAgents((prev) => new Set([...prev, auditorId]));
+              void sendChat(auditorId, msg, isPipeline ? {
                 securityMode: selectedSecurityMode,
                 permissionMode: selectedPermissionMode,
                 runGoal: selectedRunGoal,
                 runFinalAudit: selectedRunFinalAudit,
               } : undefined).finally(() => {
-                setSendingAgents((prev) => { const n = new Set(prev); n.delete('E' as AgentId); return n; });
+                setSendingAgents((prev) => { const n = new Set(prev); n.delete(auditorId); return n; });
               });
             }}
           />
@@ -1057,7 +1095,7 @@ export default function PipelinePage() {
       </div>
 
       {/* Agent Detail Modal */}
-      {expandedAgent && expandedAgent !== 'S' && (
+      {expandedAgent && expandedAgent !== supervisorId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-sunken/70" onClick={() => setExpandedAgent(null)}>
           <div className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-[var(--surface)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 border-b border-line px-6 py-4">

@@ -19,6 +19,34 @@ export interface SeatOccupant {
 
 export type SeatMap = Partial<Record<WorkerId, SeatOccupant>>;
 
+/**
+ * Where a member with no desk of their own ends up.
+ *
+ * A desk belongs to a slot, so a second member assigned to the same slot — or
+ * a member with no slot at all — has nowhere of their own to sit. They take an
+ * empty desk if the team has one, and the couch with a laptop if it does not.
+ * When the desk's own slot is filled, the guest gives it up and moves.
+ */
+const guestSeats: Array<WorkerPos> = [
+  // the green couch, then its two armchairs
+  { x: 500, y: 432, facing: 'front' },
+  { x: 568, y: 432, facing: 'front' },
+  { x: 636, y: 432, facing: 'front' },
+  { x: 424, y: 458, facing: 'front' },
+  { x: 690, y: 458, facing: 'front' },
+  // the brown couch under the TV
+  { x: 838, y: 484, facing: 'front' },
+  { x: 902, y: 484, facing: 'front' },
+  { x: 966, y: 484, facing: 'front' },
+  // and the café stools, for an overflowing room
+  { x: 150, y: 470, facing: 'back' },
+  { x: 208, y: 470, facing: 'back' },
+  { x: 266, y: 470, facing: 'back' },
+];
+
+/** Sprite sheets guests borrow, so a fifth member is not invisible. */
+const guestSprites: WorkerId[] = ['planner', 'coder', 'reviewer', 'tester', 'auditor', 'supervisor'];
+
 /** The slice of a roster member the office needs in order to describe them. */
 export interface OfficeMember {
   id: string;
@@ -279,6 +307,19 @@ function computeOccupiedPositions(
 // Determines whether a candidate idle spot is too close to any occupied position,
 // honoring the group-spot exception (sofa/cafe/tv allow side-by-side
 // stacking with other spots of the same label, but never exact-coord collision).
+/**
+ * Guest seats, read back out of the placement signature.
+ *
+ * Wanderers pick from `idleSpots`, which knows nothing about the couch seats
+ * guests use, so without this someone can wander into a guest's lap.
+ */
+function guestSpotsFrom(placementKey: string): Array<{ x: number; y: number }> {
+  if (!placementKey) return [];
+  return placementKey.split('|').map((entry) => {
+    const [x, y] = entry.split('@')[1].split(',').map(Number);
+    return { x, y };
+  });
+}
 function isCandidateBlocked(candidate: Candidate, occupied: Array<{ x: number; y: number }>) {
   const candidateIsGroup = candidate.label === 'sofa' || candidate.label === 'cafe' || candidate.label === 'tv';
   for (const p of occupied) {
@@ -927,19 +968,24 @@ function MemberStatCard({
   y,
   isActive,
   now,
+  pinned = false,
 }: {
   stats: OfficeMember;
   x: number;
   y: number;
   isActive: boolean;
   now: number;
+  /** Opened by a tap rather than a hover, so it says how to get to the chat. */
+  pinned?: boolean;
 }) {
   const energy = energyLabel(stats);
+  // Members near a wall would otherwise have half the card outside the room.
+  const left = Math.min(Math.max(x, 104), SCENE_W - 104);
 
   return (
     <div
       className="pointer-events-none absolute z-[60] w-[200px] -translate-x-1/2 rounded-lg border border-line bg-surface-raised/95 p-2.5 shadow-xl backdrop-blur-sm"
-      style={{ left: x, top: y - 132 }}
+      style={{ left, top: y - 132 }}
       role="tooltip"
     >
       <div className="flex items-center gap-1.5">
@@ -978,6 +1024,10 @@ function MemberStatCard({
           )}
         </div>
       </dl>
+
+      {pinned && (
+        <p className="mt-2 text-center text-[9px] uppercase tracking-wider text-ink-faint">Tap again to open the chat</p>
+      )}
     </div>
   );
 }
@@ -988,6 +1038,7 @@ export function LunarOfficeScene({
   latestSpeech,
   runFinalAudit = false,
   seats = {},
+  guests = [],
   members = [],
   onAgentClick
 }: {
@@ -997,7 +1048,9 @@ export function LunarOfficeScene({
   runFinalAudit?: boolean;
   /** Which roster member occupies each desk. */
   seats?: SeatMap;
-  /** Live roster data, for the hover stat card. */
+  /** Members with no desk of their own — extra fills for a slot, or no slot. */
+  guests?: SeatOccupant[];
+  /** Live roster data, for the stat card. */
   members?: OfficeMember[];
   onAgentClick?: (agent: string) => void;
 }) {
@@ -1011,6 +1064,27 @@ export function LunarOfficeScene({
     }
     return active;
   }, [agentStatus, seats]);
+
+  /**
+   * Where each deskless member ends up. An empty desk is the better seat, so
+   * guests fill those first and only then take a couch. Nothing is remembered
+   * between renders: fill a slot and its squatter is simply placed elsewhere
+   * on the next pass, which reads on screen as them getting up and moving.
+   */
+  // Any desk without a member of its own is free, the auditor's included: the
+  // audit phase being switched off empties that chair, it does not remove it
+  // from the room.
+  const freeDesks = workers.filter((w) => !seats[w.id]).map((w) => homePositions[w.id]);
+  // Borrow a sprite sheet nobody at a desk is using, so a guest does not turn
+  // up as somebody else's twin.
+  const spareSprites = guestSprites.filter((id) => !seats[id]);
+  const guestPlacements = guests.map((guest, i) => {
+    const desk = freeDesks[i];
+    const pos = desk ?? guestSeats[(i - freeDesks.length) % guestSeats.length];
+    const pool = spareSprites.length > 0 ? spareSprites : guestSprites;
+    return { guest, pos, laptop: !desk, sprite: pool[i % pool.length] };
+  });
+  const placementKey = guestPlacements.map((p) => `${p.guest.agentId}@${p.pos.x},${p.pos.y}`).join('|');
 
   const sceneRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -1188,7 +1262,9 @@ export function LunarOfficeScene({
       // Filter to spots NOT already occupied by some other worker (idle position OR home OR phase override).
       // Without this, sendGroup blindly assigns spots by index and stomps on whoever's already there
       // (e.g. Eddie's home is on a couch spot; a second TV group can land on the existing pair).
+      const guestSpots = guestSpotsFrom(placementKey);
       const unoccupiedSpots = allSpots.filter(spot => {
+        if (guestSpots.some(g => g.x === spot.x && g.y === spot.y)) return false;
         return !workers.some(w => {
           if (agents.includes(w.id)) return false; // ignore the agents we're about to send
           if (w.id === 'auditor' && !runFinalAudit) return false;
@@ -1343,7 +1419,10 @@ export function LunarOfficeScene({
           // Considers ALL other workers' actual positions (phase override > idle > home)
           // so wanderers don't land on top of someone at home or at a phase desk.
           // Pingpong is excluded here — it requires a partner, so only sendGroup() puts agents there.
-          const occupiedPositions = computeOccupiedPositions(wId as WorkerId, activePhase, runFinalAudit, idlePositionsRef.current);
+          const occupiedPositions = [
+            ...computeOccupiedPositions(wId as WorkerId, activePhase, runFinalAudit, idlePositionsRef.current),
+            ...guestSpotsFrom(placementKey),
+          ];
           const soloSpots = idleSpots.filter(s => s.label !== 'tv');
           const startIdx = Math.floor(Math.random() * soloSpots.length);
           let spot = soloSpots[startIdx];
@@ -1412,18 +1491,52 @@ export function LunarOfficeScene({
     }
     scheduleWander();
     return () => idleWanderRef.current.forEach(t => window.clearTimeout(t));
-  }, [activePhase, runFinalAudit, activeWorkerIds]);
+    // placementKey is in here so a wanderer scheduled before a guest sat down
+    // still sees that seat as taken; it only reschedules the next wander.
+  }, [activePhase, runFinalAudit, activeWorkerIds, placementKey]);
   // Speech only shows after walking stops, randomized per agent per phase
   const [showSpeech, setShowSpeech] = useState(false);
-  const [hoveredSeat, setHoveredSeat] = useState<WorkerId | null>(null);
+  /** Member id under the pointer, and the one a tap has pinned open. */
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [pinnedId, setPinnedId] = useState<string | null>(null);
+  const pointerTypeRef = useRef<string>('mouse');
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const shownCardId = pinnedId || hoveredId;
 
-  // Only tick while somebody is mid-turn — an idle office has no uptime.
+  // Only tick while a card is open — an unwatched office has no uptime to show.
   useEffect(() => {
-    if (!hoveredSeat) return;
+    if (!shownCardId) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [hoveredSeat]);
+  }, [shownCardId]);
+
+  // Guests walk when their placement changes — when a slot they were squatting
+  // in gets its own member, for instance. The placements are recomputed every
+  // render, so the effect keys off a signature of them rather than the array.
+  const [walkingGuests, setWalkingGuests] = useState<Set<string>>(new Set());
+  const previousGuestSpots = useRef<Record<string, string>>({});
+  useEffect(() => {
+    const moved: string[] = [];
+    const spots: Record<string, string> = {};
+    for (const entry of placementKey ? placementKey.split('|') : []) {
+      const [agentId, spot] = entry.split('@');
+      spots[agentId] = spot;
+      const before = previousGuestSpots.current[agentId];
+      if (before && before !== spot) moved.push(agentId);
+    }
+    previousGuestSpots.current = spots;
+    if (moved.length === 0) return;
+
+    setWalkingGuests((prev) => new Set([...prev, ...moved]));
+    const timer = window.setTimeout(() => {
+      setWalkingGuests((prev) => {
+        const next = new Set(prev);
+        for (const id of moved) next.delete(id);
+        return next;
+      });
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [placementKey]);
   const [currentSpeech, setCurrentSpeech] = useState<Partial<Record<WorkerId, string>>>({});
   useLayoutEffect(() => {
     setShowSpeech(false);
@@ -1468,10 +1581,75 @@ export function LunarOfficeScene({
   const tickerText =
     `/// HACKEROOM /// ${label.toUpperCase()} /// ` +
     `${seatedCount} ${seatedCount === 1 ? 'MEMBER' : 'MEMBERS'} SEATED /// ` +
+    (guests.length > 0 ? `${guests.length} ${guests.length === 1 ? 'GUEST' : 'GUESTS'} /// ` : '') +
     `${working ? 'BUILD IN PROGRESS' : 'STANDING BY'} /// `;
+
+  /** One person in the room: their card, their sprite, and how you poke them. */
+  const renderOccupant = (occupant: {
+    key: string;
+    agentId: string;
+    name: string;
+    color: string;
+    sprite: WorkerId;
+    pos: WorkerPos;
+    isActive: boolean;
+    isWalking: boolean;
+    isWaiting?: boolean;
+    carrying?: boolean;
+    speech?: string | null;
+    laptop?: boolean;
+  }) => {
+    const stats = members.find((m) => m.id === occupant.agentId);
+    return (
+      <div
+        key={occupant.key}
+        className="cursor-pointer"
+        onPointerDown={(e) => { pointerTypeRef.current = e.pointerType; }}
+        onPointerEnter={(e) => { if (e.pointerType === 'mouse') setHoveredId(occupant.agentId); }}
+        onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHoveredId(null); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          // A touch has no hover to show the card with, so the first tap opens
+          // it and the second one opens the chat.
+          if (pointerTypeRef.current !== 'mouse' && pinnedId !== occupant.agentId) {
+            setPinnedId(occupant.agentId);
+            return;
+          }
+          setPinnedId(null);
+          onAgentClick?.(occupant.agentId);
+        }}
+      >
+        {shownCardId === occupant.agentId && stats && (
+          <MemberStatCard
+            stats={stats}
+            x={occupant.pos.x}
+            y={occupant.pos.y}
+            isActive={occupant.isActive}
+            now={nowMs}
+            pinned={pinnedId === occupant.agentId}
+          />
+        )}
+        <PixelSprite
+          id={occupant.sprite}
+          name={occupant.name}
+          title=""
+          bodyColor={occupant.color}
+          x={occupant.pos.x}
+          y={occupant.pos.y}
+          isActive={occupant.isActive}
+          isWalking={occupant.isWalking}
+          isWaiting={occupant.isWaiting}
+          facing={occupant.pos.facing}
+          carrying={occupant.carrying}
+          laptop={occupant.laptop}
+          speech={occupant.speech ?? null}
+        />
+      </div>
+    );
+  };
   return <div className="rounded-2xl border border-line bg-[#0e0c10] p-1 sm:p-2"><div ref={sceneRef} className="overflow-hidden rounded-xl border border-[#4a3a36]" style={{
       height: SCENE_H * scale
-    }}><div className="relative origin-top-left" style={{
+    }}><div className="relative origin-top-left" onClick={() => setPinnedId(null)} style={{
         width: SCENE_W,
         height: SCENE_H,
         transform: `scale(${scale})`
@@ -1491,7 +1669,7 @@ export function LunarOfficeScene({
           <TVScreen isOn={couchOccupied} />
         </div>
         
-{workers.filter(w => w.id !== 'auditor' || runFinalAudit).map(w => {
+{workers.map(w => {
           const wId = w.id as WorkerId;
           const phaseOverride = phasePositions[activePhase as string]?.[wId];
           const idleOverride = idlePositions[wId as WorkerId];
@@ -1510,15 +1688,36 @@ export function LunarOfficeScene({
           const isWaiting = !!phaseOverride && !isActive && !isWalking;
           // Show speech bubbles for active agents
           const bubbleText = isActive && !isWalking ? speech || (showSpeech ? currentSpeech[wId] : null) : null;
-          const stats = members.find(m => m.id === occupant.agentId);
-          return <div
-            key={w.id}
-            onClick={() => onAgentClick?.(occupant.agentId)}
-            onMouseEnter={() => setHoveredSeat(wId)}
-            onMouseLeave={() => setHoveredSeat(null)}
-            className="cursor-pointer"
-          >{hoveredSeat === wId && stats && <MemberStatCard stats={stats} x={pos.x} y={pos.y} isActive={isActive} now={nowMs} />}<PixelSprite id={w.id} name={occupant.name} title="" bodyColor={occupant.color} x={pos.x} y={pos.y} isActive={isActive} isWalking={isWalking} isWaiting={isWaiting} facing={pos.facing} carrying={phaseCarriers[activePhase] === wId} speech={bubbleText} /></div>;
-        })}<div className="absolute left-3 top-3 z-30 rounded-md border border-line bg-black/50 px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.24em] text-[#d7d4cd]">Mission Control</div><div className="absolute right-3 top-3 z-30 rounded-md border border-line bg-black/60 px-3 py-2 text-right backdrop-blur-sm"><p className="font-mono text-[9px] uppercase tracking-[0.24em] text-[#c8b9a7]">Hackeroom</p><p className="mt-0.5 text-sm font-semibold text-ink">{label}</p></div><div className="absolute inset-x-0 bottom-0 z-30 h-[22px] overflow-hidden border-t border-[#38313a] bg-black/90"><motion.div className="absolute top-1/2 -translate-y-1/2 whitespace-nowrap font-mono text-[10px] text-[#35f38f]/80" animate={{
+          return renderOccupant({
+            key: w.id,
+            agentId: occupant.agentId,
+            name: occupant.name,
+            color: occupant.color,
+            sprite: wId,
+            pos,
+            isActive,
+            isWalking,
+            isWaiting,
+            carrying: phaseCarriers[activePhase] === wId,
+            speech: bubbleText,
+          });
+        })}
+        {/* Members with no desk of their own — an extra fill for a slot, or no
+            slot at all. They borrow an empty desk, or sit with a laptop. */}
+        {guestPlacements.map(({ guest, pos, laptop, sprite }) =>
+          renderOccupant({
+            key: `guest-${guest.agentId}`,
+            agentId: guest.agentId,
+            name: guest.name,
+            color: guest.color,
+            sprite,
+            pos,
+            isActive: agentStatus[guest.agentId] === 'active' || agentStatus[guest.agentId] === 'working',
+            isWalking: walkingGuests.has(guest.agentId),
+            speech: latestSpeech[guest.agentId] ?? null,
+            laptop,
+          })
+        )}<div className="absolute left-3 top-3 z-30 rounded-md border border-line bg-black/50 px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.24em] text-[#d7d4cd]">Mission Control</div><div className="absolute right-3 top-3 z-30 rounded-md border border-line bg-black/60 px-3 py-2 text-right backdrop-blur-sm"><p className="font-mono text-[9px] uppercase tracking-[0.24em] text-[#c8b9a7]">Hackeroom</p><p className="mt-0.5 text-sm font-semibold text-ink">{label}</p></div><div className="absolute inset-x-0 bottom-0 z-30 h-[22px] overflow-hidden border-t border-[#38313a] bg-black/90"><motion.div className="absolute top-1/2 -translate-y-1/2 whitespace-nowrap font-mono text-[10px] text-[#35f38f]/80" animate={{
             x: [0, -1200]
           }} transition={{
             duration: 25,

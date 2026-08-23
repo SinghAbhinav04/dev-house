@@ -51,6 +51,17 @@ export interface TokenUsage {
   totalCostUsd: number;
 }
 
+/**
+ * Usage as the state file actually stores it: a total plus the same numbers
+ * attributed per member and per model. The client type said `TokenUsage`, so
+ * anything reading a per-member figure had to go around it.
+ */
+export interface UsageBreakdown {
+  total: TokenUsage;
+  byMember: Record<string, TokenUsage>;
+  byModel: Record<string, TokenUsage>;
+}
+
 export interface PipelineState {
   concept: string;
   projectDir: string;
@@ -66,7 +77,7 @@ export interface PipelineState {
   agentStatus: Record<AgentId, string>;
   sessions: Record<string, string>;
   buildComplete: boolean;
-  usage: TokenUsage;
+  usage: UsageBreakdown;
   runtime?: PipelineRuntimeState;
   events: PipelineEvent[];
   auditFindings?: AuditFinding[];
@@ -103,7 +114,11 @@ const EMPTY_STATE: PipelineState = {
   agentStatus: {},
   sessions: {},
   buildComplete: false,
-  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalCostUsd: 0 },
+  usage: {
+    total: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalCostUsd: 0 },
+    byMember: {},
+    byModel: {},
+  },
   runtime: { activeTurn: null, activeTurns: {} },
   events: [],
   auditFindings: [],
