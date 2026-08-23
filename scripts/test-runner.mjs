@@ -216,4 +216,68 @@ assert.equal(
   'a member that does not want isolation has nothing to fall back from',
 );
 
+// Losing isolation is a safety question, not an availability one: a run that
+// required it must not be relocated to the host by any later decision.
+assert.equal(
+  new AutoRunner().supportsHostFallback({ ...isolated, requireIsolation: true }),
+  false,
+  'required isolation refuses the mid-turn host fallback',
+);
+
+const auto = new AutoRunner();
+const dockerUp = new DockerRunner().isAvailable();
+
+const status = auto.isolationStatus(isolated);
+assert.equal(status.requested, true, 'the member asked to be isolated');
+assert.equal(status.available, dockerUp, 'availability tracks whether Docker can actually serve it');
+assert.equal(status.reason === '', dockerUp, 'an unavailable backend has to say why');
+
+assert.deepEqual(
+  auto.isolationStatus({ capabilities: caps({ preferIsolated: false }) }),
+  { requested: false, available: false, reason: '' },
+  'a member that never asked for isolation is not reported as having lost it',
+);
+assert.equal(
+  new HostRunner().isolationStatus(isolated).requested,
+  false,
+  'an explicit host runner is an operator decision, not a lost boundary',
+);
+
+// Docker is up on some machines and not others, and this is the assertion that
+// most needs to hold either way, so the backend is stubbed unavailable rather
+// than the test being skipped.
+const grounded = new AutoRunner();
+grounded.docker.isAvailable = () => false;
+grounded.docker.unavailableReason = () => 'Docker is not running or not installed.';
+
+const isolationRequired = {
+  ...isolated,
+  requireIsolation: true,
+  prompt: 'x',
+  projectDir: '/tmp/project',
+  model: 'haiku',
+  systemPrompt: 'x',
+};
+
+assert.throws(
+  () => grounded.spawn(isolationRequired),
+  /Isolation is required/,
+  'required isolation throws rather than silently spawning on the host',
+);
+assert.throws(
+  () => grounded.spawn({ ...isolationRequired, forceHost: true }),
+  /Isolation is required/,
+  'forceHost does not override required isolation',
+);
+assert.equal(
+  grounded.isolationStatus(isolated).available,
+  false,
+  'an unavailable backend reports isolation as unavailable before anything spawns',
+);
+assert.match(
+  grounded.isolationStatus(isolated).reason,
+  /Docker/,
+  'the caller is told why, so the pause can explain itself',
+);
+
 console.log('runner checks passed');

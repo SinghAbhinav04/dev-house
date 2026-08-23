@@ -59,8 +59,13 @@ not arbitrary URLs.
 per-member network profiles and read-only mounts, and it works in narrow cases.
 It is not the default and is not going to become it: Claude Code subscription
 authentication inside containers is unreliable enough that runs fail in ways
-that look like the tool being broken. When it does fail, the run falls back to
-the host and says so in the event log.
+that look like the tool being broken.
+
+What it no longer does is fall back on its own. A run that asked for isolation
+and cannot have it pauses and asks, or fails outright if it was started with
+isolation required. The old behaviour — retry on the host, write a line about
+it afterwards — treated a change of safety boundary as a change of
+availability, which is the wrong trade regardless of how good the logging is.
 
 If you need genuine isolation, run the whole thing in a VM. That is a real
 answer; a container that cannot reliably authenticate is not.

@@ -19,6 +19,8 @@ export const STAGING_DIR = join(BUILDS_DIR, '.staging');
 export type SecurityMode = 'fast' | 'strict';
 export type PermissionMode = 'auto' | 'plan' | 'dangerously-skip-permissions';
 export type RunGoal = 'full-build' | 'plan-only';
+/** What a run does when a member that asked to be isolated cannot be. */
+export type IsolationPolicy = 'ask' | 'required';
 export type ResumeOutcome = 'continue-approved-plan' | 'resume-stalled-turn';
 
 function readJson(file: string): Record<string, unknown> | null {
@@ -105,8 +107,10 @@ export function startPipelineRun(options: {
   permissionMode?: PermissionMode;
   runGoal?: RunGoal;
   runFinalAudit?: boolean;
-}): { success: boolean; error?: string; projectDir?: string; securityMode?: SecurityMode; permissionMode?: PermissionMode; runGoal?: RunGoal; runFinalAudit?: boolean } {
+  isolationPolicy?: IsolationPolicy;
+}): { success: boolean; error?: string; projectDir?: string; securityMode?: SecurityMode; permissionMode?: PermissionMode; runGoal?: RunGoal; runFinalAudit?: boolean; isolationPolicy?: IsolationPolicy } {
   const securityMode = options.securityMode === 'strict' ? 'strict' : 'fast';
+  const isolationPolicy: IsolationPolicy = options.isolationPolicy === 'required' ? 'required' : 'ask';
   const permissionMode: PermissionMode = options.permissionMode === 'plan' ? 'plan'
     : options.permissionMode === 'dangerously-skip-permissions' ? 'dangerously-skip-permissions'
     : 'auto';
@@ -173,6 +177,7 @@ export function startPipelineRun(options: {
   stagingState.permissionMode = permissionMode;
   stagingState.runGoal = runGoal;
   stagingState.runFinalAudit = runFinalAudit;
+  stagingState.isolationPolicy = isolationPolicy;
   stagingState.stopAfterPhase = runGoal === 'plan-only' ? 'plan-review' : 'none';
   stagingState.pipelineStatus = 'running';
   stagingState.resumeAction = 'none';
@@ -184,7 +189,7 @@ export function startPipelineRun(options: {
 
   spawnOrchestrator(projectDir, securityMode, aSession || undefined, permissionMode);
 
-  return { success: true, projectDir, securityMode, permissionMode, runGoal, runFinalAudit };
+  return { success: true, projectDir, securityMode, permissionMode, runGoal, runFinalAudit, isolationPolicy };
 }
 
 export function setStopAfterReview(enabled: boolean, projectDir?: string): { success: boolean; error?: string; stopAfterPhase?: string; projectDir?: string } {

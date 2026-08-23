@@ -87,8 +87,19 @@ always asks even in fast mode, `all` never asks even in strict mode.
 A Docker runner exists (`pipeline/runner.ts`) with per-member network profiles
 and read-only mounts for members that do not need to write. It is **not the
 default** and is not the recommended path: Claude Code subscription
-authentication inside containers is not reliable enough. When it fails, the run
-falls back to the host and says so in the event log.
+authentication inside containers is not reliable enough.
+
+When it is unavailable, the run does not quietly continue without it. Losing
+isolation changes what a member can reach, so it is treated as a safety
+decision rather than an availability one:
+
+- **Ask** (default) — the run pauses before the session starts and asks whether
+  to continue on the host. Denying stops the run.
+- **Required** — the run fails instead of asking. The runner enforces this
+  itself, so nothing above it can relocate the member to the host.
+
+Both the coder and the tester default to `preferIsolated`, so they are the two
+this applies to. Every turn records which side of the boundary it ran on.
 
 See [SECURITY-ROADMAP.md](SECURITY-ROADMAP.md) for the honest status.
 

@@ -320,6 +320,16 @@ interface PipelineState {
   projectDir: string;
   currentPhase: string;
   securityMode: 'fast' | 'strict';
+  /**
+   * What happens when a member that asked to be isolated cannot be.
+   *
+   * 'ask'      — pause and let the user decide whether to continue on the host
+   * 'required' — fail the run instead; the boundary is not negotiable
+   *
+   * Never silently: losing isolation changes what a member can reach, which is
+   * a safety question rather than an availability one.
+   */
+  isolationPolicy: 'ask' | 'required';
   runGoal: 'full-build' | 'plan-only';
   runFinalAudit: boolean;
   stopAfterPhase: 'none' | 'plan-review';
@@ -349,6 +359,7 @@ if (resumingExistingProject && existsSync(eventsFile)) {
     projectDir: existing.projectDir || projectDir,
     currentPhase: existing.currentPhase || 'concept',
     securityMode: existing.securityMode === 'strict' ? 'strict' : securityMode,
+    isolationPolicy: existing.isolationPolicy === 'required' ? 'required' : 'ask',
     runGoal: existing.runGoal === 'plan-only' ? 'plan-only' : 'full-build',
     runFinalAudit: existing.runFinalAudit === true,
     stopAfterPhase: existing.stopAfterPhase === 'plan-review' ? 'plan-review' : 'none',
@@ -374,6 +385,7 @@ if (resumingExistingProject && existsSync(eventsFile)) {
   let existingRunGoal = 'full-build';
   let existingStopAfterPhase = 'none';
   let existingRunFinalAudit = false;
+  let existingIsolationPolicy: 'ask' | 'required' = 'ask';
   if (existsSync(eventsFile)) {
     try {
       const existing = JSON.parse(readFileSync(eventsFile, 'utf8'));
@@ -383,6 +395,7 @@ if (resumingExistingProject && existsSync(eventsFile)) {
       existingRunGoal = existing.runGoal || existingRunGoal;
       existingStopAfterPhase = existing.stopAfterPhase || existingStopAfterPhase;
       existingRunFinalAudit = existing.runFinalAudit === true;
+      if (existing.isolationPolicy === 'required') existingIsolationPolicy = 'required';
       if (existing.securityMode === 'strict') securityMode = 'strict';
     } catch {}
   }
@@ -391,6 +404,7 @@ if (resumingExistingProject && existsSync(eventsFile)) {
     projectDir,
     currentPhase: 'concept',
     securityMode,
+    isolationPolicy: existingIsolationPolicy,
     runGoal: existingRunGoal === 'plan-only' ? 'plan-only' : 'full-build',
     runFinalAudit: existingRunFinalAudit,
     stopAfterPhase: existingStopAfterPhase === 'plan-review' ? 'plan-review' : 'none',
@@ -624,6 +638,10 @@ async function runClaudeTurn(
           ]
         : undefined,
       forceHost: opts.forceHost,
+      // The runner refuses to relocate a required-isolation member to the host
+      // even if something above it asks, so the guarantee does not depend on
+      // every caller getting the order of checks right.
+      requireIsolation: state.isolationPolicy === 'required',
     };
     const child = runner.spawn(runnerOpts);
     const usedDocker = child.backend === 'docker';
@@ -633,6 +651,10 @@ async function runClaudeTurn(
 
     if (usedDocker) {
       emit('system', state.currentPhase, 'status', `Running ${member.name} in isolated Docker worker.`);
+    } else if (member.capabilities?.preferIsolated) {
+      // Only reachable once the user has approved it, but the log should say
+      // which side of the boundary each turn actually ran on.
+      emit('system', state.currentPhase, 'status', `Running ${member.name} on the host — isolation waived for this turn.`);
     }
 
     let lastResult: Record<string, unknown> | null = null;
@@ -900,6 +922,74 @@ async function runClaudeTurn(
   });
 }
 
+/**
+ * Decide what to do when a member that asked to be isolated cannot be.
+ *
+ * Returns true only when the user has explicitly accepted running that member
+ * on the host. Under `isolationPolicy: 'required'` it never asks — the run
+ * fails instead. This used to be a `console.warn` and a retry: availability
+ * logic applied to a safety boundary, which quietly widened what the coder and
+ * the tester could reach.
+ */
+async function resolveLostIsolation(agent: string, who: string, why: string): Promise<boolean> {
+  if (state.isolationPolicy === 'required') {
+    emit('system', state.currentPhase, 'failure', `Isolation unavailable for ${who} — run stopped.`);
+    emitSupervisor(
+      state.currentPhase,
+      `I stopped the run. ${why} This run was started with isolation required, so continuing on the host is not something I can decide for you.`
+    );
+    return false;
+  }
+
+  const pending: PendingApproval = {
+    requestId: randomUUID(),
+    projectDir,
+    agent,
+    tool: 'Isolation',
+    input: { member: who },
+    description: `${why}\n\nContinuing runs ${who} on your machine instead, with the hook still enforcing their capabilities but no container around them.`,
+    createdAt: new Date().toISOString(),
+    approved: null,
+    phase: state.currentPhase,
+    reason: `Isolation unavailable for ${who}`,
+  };
+
+  writePendingApproval(projectDir, pending);
+  setPipelineStatus('paused');
+  emit('system', state.currentPhase, 'status', `Paused: isolation unavailable for ${who}`);
+  emitSupervisor(
+    state.currentPhase,
+    `I paused the run rather than quietly moving ${who} onto the host. ${why} Approve to continue on the host, or deny to stop here.`
+  );
+
+  const approved = await waitForPendingApproval(projectDir, pending.requestId);
+  clearPendingApproval(projectDir, pending.requestId);
+
+  if (approved !== true) {
+    emit(
+      'system',
+      state.currentPhase,
+      'failure',
+      approved === null ? `Isolation decision expired for ${who}` : `Host fallback denied for ${who}`
+    );
+    emitSupervisor(
+      state.currentPhase,
+      approved === null
+        ? `Nobody answered the isolation question for ${who}, so I stopped rather than assume it was fine.`
+        : `You chose not to run ${who} on the host, so I stopped the run there.`
+    );
+    return false;
+  }
+
+  setPipelineStatus('running');
+  emit('system', state.currentPhase, 'approval', `Host fallback approved for ${who}`);
+  emitSupervisor(
+    state.currentPhase,
+    `You approved running ${who} on the host for this turn, so the run continues without a container around that member.`
+  );
+  return true;
+}
+
 async function claude(
   slot: SlotId,
   prompt: string,
@@ -920,6 +1010,21 @@ async function claude(
   let forceHost = false;
 
   while (true) {
+    // Isolation that was asked for and cannot be given is decided before the
+    // session starts, not reported after it is already running on the host.
+    if (!forceHost) {
+      const isolation = runner.isolationStatus({ capabilities: member.capabilities });
+      if (isolation.requested && !isolation.available) {
+        const allowed = await resolveLostIsolation(
+          agent,
+          who,
+          `${who} is configured to run isolated, but that is not possible right now. ${isolation.reason}`
+        );
+        if (!allowed) throw new Error(`Isolation unavailable for ${who}`);
+        forceHost = true;
+      }
+    }
+
     const turn = await runClaudeTurn(slot, currentPrompt, {
       resume: currentResume,
       jsonSchema: opts.jsonSchema,
@@ -928,12 +1033,13 @@ async function claude(
     });
 
     if (turn.fallbackToHost && !forceHost) {
-      forceHost = true;
-      emit('system', state.currentPhase, 'status', `Isolated ${who} auth is unavailable. Retrying on the host.`);
-      emitSupervisor(
-        state.currentPhase,
-        `I could not keep ${who} isolated for this turn because Claude subscription auth is unavailable in Docker right now, so I am retrying it on the host instead of failing the run.`
+      const allowed = await resolveLostIsolation(
+        agent,
+        who,
+        turn.fallbackReason || `Isolation for ${who} failed mid-turn.`
       );
+      if (!allowed) throw new Error(`Isolation lost for ${who}`);
+      forceHost = true;
       continue;
     }
 

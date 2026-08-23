@@ -6,7 +6,7 @@ import { Badge } from '@/components/shared/Badge';
 import { AutoGrowTextarea } from '@/components/shared/AutoGrowTextarea';
 import { MarkdownText } from '@/components/shared/MarkdownText';
 import { getExecutionPathStatus, getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
-import { usePipelineState, type AgentId, type AppMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
+import { usePipelineState, type AgentId, type AppMode, type IsolationPolicy, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
 import { useTeam } from '@/lib/use-team';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
 import { MODEL_ALIASES, SLOT_LABELS } from '@/lib/team/types';
@@ -49,6 +49,7 @@ export default function SquadPage() {
   const [selectedSecurityMode, setSelectedSecurityMode] = useState<SecurityMode>('fast');
   const [selectedRunGoal, setSelectedRunGoal] = useState<RunGoal>('full-build');
   const [selectedRunFinalAudit, setSelectedRunFinalAudit] = useState<boolean>(false);
+  const [selectedIsolationPolicy, setSelectedIsolationPolicy] = useState<IsolationPolicy>('ask');
   const [chatInput, setChatInput] = useState('');
   const [sendingAgents, setSendingAgents] = useState<Set<AgentId>>(new Set());
 
@@ -108,6 +109,7 @@ export default function SquadPage() {
   const activeSecurityMode = state.projectDir ? (state.securityMode || 'fast') : selectedSecurityMode;
   const activeRunGoal = state.projectDir ? (state.runGoal || 'full-build') : selectedRunGoal;
   const activeRunFinalAudit = state.projectDir ? !!state.runFinalAudit : selectedRunFinalAudit;
+  const displayedIsolationPolicy = state.projectDir ? (state.isolationPolicy || 'ask') : selectedIsolationPolicy;
   const securityModeLocked = isPipeline && (pipelineRunning || pipelinePaused || !!state.projectDir);
   const displayedSecurityMode = securityModeLocked ? activeSecurityMode : selectedSecurityMode;
   const displayedRunGoal = securityModeLocked ? activeRunGoal : selectedRunGoal;
@@ -155,7 +157,7 @@ export default function SquadPage() {
   }
 
   async function handleStart() {
-    await startPipeline(selectedSecurityMode, selectedRunGoal, undefined, selectedRunFinalAudit);
+    await startPipeline(selectedSecurityMode, selectedRunGoal, undefined, selectedRunFinalAudit, selectedIsolationPolicy);
     setSelectedAgent(supervisor?.id || members[0]?.id || '');
   }
 
@@ -281,6 +283,33 @@ export default function SquadPage() {
                         Plan Only
                       </button>
                     </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1.5 text-[9px] uppercase tracking-[0.18em] text-ink-faint">If Isolation Is Lost</div>
+                    <div className="flex rounded-lg border border-line bg-surface-raised p-1">
+                      <button
+                        onClick={() => setSelectedIsolationPolicy('ask')}
+                        disabled={securityModeLocked}
+                        className={`${segmentClass(displayedIsolationPolicy === 'ask')} disabled:opacity-40`}
+                        style={displayedIsolationPolicy === 'ask' ? { background: 'var(--signal-warn)' } : undefined}
+                      >
+                        Ask
+                      </button>
+                      <button
+                        onClick={() => setSelectedIsolationPolicy('required')}
+                        disabled={securityModeLocked}
+                        className={`${segmentClass(displayedIsolationPolicy === 'required')} disabled:opacity-40`}
+                        style={displayedIsolationPolicy === 'required' ? { background: 'var(--signal-bad)' } : undefined}
+                      >
+                        Required
+                      </button>
+                    </div>
+                    <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">
+                      {displayedIsolationPolicy === 'required'
+                        ? 'Stop the run rather than continue on the host.'
+                        : 'Pause and ask before continuing on the host.'}
+                    </p>
                   </div>
 
                   <div>
@@ -563,17 +592,19 @@ export default function SquadPage() {
                 <div className="space-y-4">
                   {visiblePendingApproval && (
                     <div className="rounded-xl border border-signal-warn/40 bg-signal-warn/10 px-3 py-3 text-signal-warn">
-                      <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-signal-warn">Approval Required</div>
-                      <p className="mt-2 text-sm leading-relaxed">{visiblePendingApproval.description}</p>
+                      <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-signal-warn">
+                        {visiblePendingApproval.tool === 'Isolation' ? 'Isolation Unavailable' : 'Approval Required'}
+                      </div>
+                      <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{visiblePendingApproval.description}</p>
                       <p className="mt-2 text-xs uppercase tracking-wider text-signal-warn">
-                        Agent {visiblePendingApproval.agent} · {visiblePendingApproval.phase || state.currentPhase}
+                        {memberName(visiblePendingApproval.agent)} · {visiblePendingApproval.phase || state.currentPhase}
                       </p>
                       <div className="mt-3 flex gap-2">
                         <button onClick={() => void approveBash(true, visiblePendingApproval)} className="flex-1 rounded-lg bg-signal-ok px-3 py-2 text-sm font-semibold text-black">
-                          Approve
+                          {visiblePendingApproval.tool === 'Isolation' ? 'Continue on host' : 'Approve'}
                         </button>
                         <button onClick={() => void approveBash(false, visiblePendingApproval)} className="flex-1 rounded-lg bg-signal-bad px-3 py-2 text-sm font-semibold text-ink">
-                          Deny
+                          {visiblePendingApproval.tool === 'Isolation' ? 'Stop the run' : 'Deny'}
                         </button>
                       </div>
                     </div>

@@ -21,6 +21,7 @@ export const EMPTY_STATE = {
   projectDir: '',
   currentPhase: 'concept',
   securityMode: 'fast',
+  isolationPolicy: 'ask',
   runGoal: 'full-build',
   runFinalAudit: false,
   stopAfterPhase: 'none',
@@ -60,6 +61,9 @@ export function normalizeState(data: Record<string, unknown>) {
     ...EMPTY_STATE,
     ...data,
     securityMode: data.securityMode === 'strict' ? 'strict' : 'fast',
+    // Older state files predate the setting; 'ask' is the safe reading of
+    // silence, since it stops rather than relocating a member on its own.
+    isolationPolicy: data.isolationPolicy === 'required' ? 'required' : 'ask',
     runGoal: data.runGoal === 'plan-only' ? 'plan-only' : 'full-build',
     runFinalAudit: data.runFinalAudit === true,
     stopAfterPhase: data.stopAfterPhase === 'plan-review' ? 'plan-review' : 'none',

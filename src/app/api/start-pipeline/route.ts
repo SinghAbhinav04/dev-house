@@ -6,8 +6,10 @@ export async function POST(req: NextRequest) {
   let permissionMode = 'auto';
   let runGoal = 'full-build';
   let runFinalAudit = false;
+  let isolationPolicy = 'ask';
   try {
     const body = await req.json();
+    if (body?.isolationPolicy === 'required') isolationPolicy = 'required';
     if (body?.securityMode === 'strict') securityMode = 'strict';
     if (body?.permissionMode === 'plan') permissionMode = 'plan';
     else if (body?.permissionMode === 'dangerously-skip-permissions') permissionMode = 'dangerously-skip-permissions';
@@ -20,6 +22,7 @@ export async function POST(req: NextRequest) {
     permissionMode: permissionMode as 'auto' | 'plan' | 'dangerously-skip-permissions',
     runGoal: runGoal === 'plan-only' ? 'plan-only' : 'full-build',
     runFinalAudit,
+    isolationPolicy: isolationPolicy === 'required' ? 'required' : 'ask',
   });
 
   if (!result.success) {

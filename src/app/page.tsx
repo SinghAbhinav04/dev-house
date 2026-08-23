@@ -9,7 +9,7 @@ import { LunarOfficeScene, type SeatMap } from '@/components/mission/LunarOffice
 import { SecurityAuditPanel } from '@/components/agents/SecurityAuditPanel';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
 import { getExecutionPathStatus, getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
-import { usePipelineState, type AgentId, type AppMode, type PendingApproval, type PermissionMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
+import { usePipelineState, type AgentId, type AppMode, type IsolationPolicy, type PendingApproval, type PermissionMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
 import { useTeam } from '@/lib/use-team';
 import { MODEL_ALIASES, SLOT_LABELS } from '@/lib/team/types';
 
@@ -51,6 +51,7 @@ export default function PipelinePage() {
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<PermissionMode>('auto');
   const [selectedRunGoal, setSelectedRunGoal] = useState<RunGoal>('full-build');
   const [selectedRunFinalAudit, setSelectedRunFinalAudit] = useState<boolean>(false);
+  const [selectedIsolationPolicy, setSelectedIsolationPolicy] = useState<IsolationPolicy>('ask');
 
   const {
     state, sendChat, startPipeline, resumePipeline, stopPipeline, setStopAfterReview, approveBash, getPlan, resetState, agentEvents, agentSpeech,
@@ -219,7 +220,7 @@ export default function PipelinePage() {
   async function handleStartPipeline() {
     completionNotifiedRef.current = false;
     setPipelineStarted(true);
-    const res = await startPipeline(selectedSecurityMode, selectedRunGoal, selectedPermissionMode, selectedRunFinalAudit);
+    const res = await startPipeline(selectedSecurityMode, selectedRunGoal, selectedPermissionMode, selectedRunFinalAudit, selectedIsolationPolicy);
     if (!res?.success) {
       setPipelineStarted(false);
       console.error('Pipeline failed to start:', res?.error || 'Unknown error');
@@ -310,6 +311,9 @@ export default function PipelinePage() {
   const activeSecurityMode = state.projectDir ? (state.securityMode || 'fast') : selectedSecurityMode;
   const activeRunGoal = state.projectDir ? (state.runGoal || 'full-build') : selectedRunGoal;
   const activeRunFinalAudit = state.projectDir ? !!state.runFinalAudit : selectedRunFinalAudit;
+  // Once a run exists the policy is whatever it started with — showing the
+  // picker's value would misreport the boundary the run is actually under.
+  const displayedIsolationPolicy = state.projectDir ? (state.isolationPolicy || 'ask') : selectedIsolationPolicy;
 
   const auditHasStarted = !!(
     activeRunFinalAudit && (
@@ -524,6 +528,32 @@ export default function PipelinePage() {
                     {selectedSecurityMode === 'strict'
                       ? 'Every C/D Bash call needs approval'
                       : 'Safe Bash auto-runs, risky Bash asks'}
+                  </span>
+                </div>
+              </div>
+            )}
+            {isPipeline && (
+              <div className="mt-3">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-faint">If Isolation Is Lost</div>
+                <div className="flex items-center gap-2">
+                  <div className="flex rounded-lg border border-line bg-surface-raised">
+                    <button
+                      onClick={() => setSelectedIsolationPolicy('ask')}
+                      disabled={securityModeLocked}
+                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${displayedIsolationPolicy === 'ask' ? 'bg-signal-warn text-ink' : 'text-[var(--ink-faint)] hover:text-[var(--ink-faint)]'}`}
+                      style={{ borderRadius: '7px 0 0 7px' }}
+                    >Ask</button>
+                    <button
+                      onClick={() => setSelectedIsolationPolicy('required')}
+                      disabled={securityModeLocked}
+                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${displayedIsolationPolicy === 'required' ? 'bg-signal-bad text-ink' : 'text-[var(--ink-faint)] hover:text-[var(--ink-faint)]'}`}
+                      style={{ borderRadius: '0 7px 7px 0' }}
+                    >Required</button>
+                  </div>
+                  <span className="text-[10px] text-ink-faint">
+                    {displayedIsolationPolicy === 'required'
+                      ? 'Stop the run rather than continue on the host'
+                      : 'Pause and ask before continuing on the host'}
                   </span>
                 </div>
               </div>
@@ -1170,17 +1200,25 @@ export default function PipelinePage() {
       {isPipeline && pendingApproval && (
         <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border-2 border-signal-warn bg-[var(--surface-raised)] px-6 py-4 shadow-[0_0_30px_rgba(245,158,11,0.2)]">
           <p className="text-xs font-bold uppercase tracking-wider text-signal-warn">
-            {activeSecurityMode === 'strict' ? 'Strict Mode' : (pendingApproval.tool as string)} — Approval Required
+            {pendingApproval.tool === 'Isolation'
+              ? 'Isolation Unavailable'
+              : activeSecurityMode === 'strict' ? 'Strict Mode' : (pendingApproval.tool as string)} — Approval Required
           </p>
-          <p className="mt-2 max-w-md break-all font-mono text-sm text-signal-warn">
+          {/* An isolation decision is prose, not a command — break-all turns it
+              into a wall of hyphenated fragments. */}
+          <p className={`mt-2 max-w-md text-sm text-signal-warn ${pendingApproval.tool === 'Isolation' ? 'whitespace-pre-line leading-relaxed' : 'break-all font-mono'}`}>
             {pendingApproval.description || JSON.stringify(pendingApproval.input)}
           </p>
           <p className="mt-2 text-[11px] uppercase tracking-wider text-signal-warn">
-            Agent {pendingApproval.agent} · {pendingApproval.phase || state.currentPhase}
+            {memberName(pendingApproval.agent)} · {pendingApproval.phase || state.currentPhase}
           </p>
           <div className="mt-3 flex gap-3">
-            <button onClick={() => approveBash(true, pendingApproval)} className="rounded-lg bg-signal-ok px-5 py-2 text-sm font-bold text-black hover:bg-signal-ok">APPROVE</button>
-            <button onClick={() => approveBash(false, pendingApproval)} className="rounded-lg bg-signal-bad px-5 py-2 text-sm font-bold text-ink hover:bg-signal-bad">DENY</button>
+            <button onClick={() => approveBash(true, pendingApproval)} className="rounded-lg bg-signal-ok px-5 py-2 text-sm font-bold text-black hover:bg-signal-ok">
+              {pendingApproval.tool === 'Isolation' ? 'CONTINUE ON HOST' : 'APPROVE'}
+            </button>
+            <button onClick={() => approveBash(false, pendingApproval)} className="rounded-lg bg-signal-bad px-5 py-2 text-sm font-bold text-ink hover:bg-signal-bad">
+              {pendingApproval.tool === 'Isolation' ? 'STOP THE RUN' : 'DENY'}
+            </button>
           </div>
         </div>
       )}

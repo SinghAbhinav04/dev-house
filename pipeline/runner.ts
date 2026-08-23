@@ -40,6 +40,29 @@ export interface RunnerOptions {
   extraEnv?: NodeJS.ProcessEnv;
   templateFiles?: string[];
   forceHost?: boolean;
+  /**
+   * Fail rather than run on the host when this member asked to be isolated.
+   *
+   * Losing isolation changes the safety boundary, not just availability, so
+   * this outranks `forceHost`: no caller can quietly downgrade a run that was
+   * started with isolation required.
+   */
+  requireIsolation?: boolean;
+}
+
+/**
+ * Whether a member that asked to be isolated will actually get it.
+ *
+ * `requested` is the member's own capability; `available` is whether the
+ * backend can honour it right now. The two used to be collapsed inside
+ * `spawn()`, which is how a run could lose isolation with nothing but a
+ * console warning to show for it.
+ */
+export interface IsolationStatus {
+  requested: boolean;
+  available: boolean;
+  /** Why it is unavailable, empty when it is not. */
+  reason: string;
 }
 
 export type RunnerChild = Pick<
@@ -56,7 +79,12 @@ export interface Runner {
   cleanup(projectDir: string): Promise<void>;
   isAvailable(): boolean;
   supportsHostFallback(opts: RunnerOptions): boolean;
+  /** Asked before spawning, so a lost boundary can be reported or refused. */
+  isolationStatus(opts: IsolationQuery): IsolationStatus;
 }
+
+/** All `isolationStatus` needs: isolation is a property of the member. */
+export type IsolationQuery = Pick<RunnerOptions, 'capabilities'>;
 
 const DOCKER_IMAGE = 'hackeroom-agent:latest';
 const KEYCHAIN_SERVICE_NAME = 'Claude Code-credentials';
@@ -199,7 +227,7 @@ function canWriteProject(capabilities?: MemberCapabilities): boolean {
   return capabilities?.write === 'project' || capabilities?.write === 'builds';
 }
 
-export function shouldPreferDocker(opts: RunnerOptions): boolean {
+export function shouldPreferDocker(opts: IsolationQuery): boolean {
   return opts.capabilities?.preferIsolated === true;
 }
 
@@ -444,6 +472,17 @@ export class HostRunner implements Runner {
     void opts;
     return false;
   }
+
+  /**
+   * Running host-only is an explicit operator choice (PIPELINE_RUNNER=host),
+   * so it is not reported as isolation being lost — there was never any to
+   * lose. The gate exists for runs that asked for it and silently did not
+   * get it.
+   */
+  isolationStatus(opts: IsolationQuery): IsolationStatus {
+    void opts;
+    return { requested: false, available: false, reason: '' };
+  }
 }
 
 export class DockerRunner implements Runner {
@@ -547,6 +586,12 @@ export class DockerRunner implements Runner {
 
     return '';
   }
+
+  isolationStatus(opts: IsolationQuery): IsolationStatus {
+    // createRunner() throws when Docker is unavailable in this mode, so
+    // reaching here at all means isolation is honoured.
+    return { requested: shouldPreferDocker(opts), available: true, reason: '' };
+  }
 }
 
 export class AutoRunner implements Runner {
@@ -555,6 +600,16 @@ export class AutoRunner implements Runner {
   private warned = false;
 
   spawn(opts: RunnerOptions): SpawnedRunnerChild {
+    // Deliberately ahead of forceHost: a run started with isolation required
+    // must not be relocated to the host by any later decision, including the
+    // orchestrator's own fallback path.
+    if (opts.requireIsolation && shouldPreferDocker(opts)) {
+      if (!this.docker.isAvailable()) {
+        throw new Error(`Isolation is required for this run but unavailable. ${this.docker.unavailableReason()}`);
+      }
+      return this.docker.spawn(opts);
+    }
+
     if (opts.forceHost) {
       return this.host.spawn(opts);
     }
@@ -580,7 +635,15 @@ export class AutoRunner implements Runner {
   }
 
   supportsHostFallback(opts: RunnerOptions): boolean {
-    return shouldPreferDocker(opts) && !opts.forceHost;
+    return shouldPreferDocker(opts) && !opts.forceHost && !opts.requireIsolation;
+  }
+
+  isolationStatus(opts: IsolationQuery): IsolationStatus {
+    const requested = shouldPreferDocker(opts);
+    if (!requested) return { requested: false, available: false, reason: '' };
+
+    const available = this.docker.isAvailable();
+    return { requested, available, reason: available ? '' : this.docker.unavailableReason() };
   }
 
   private warnUnavailable() {

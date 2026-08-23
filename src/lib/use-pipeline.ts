@@ -13,6 +13,12 @@ export type AppMode = 'pipeline' | 'manual';
 export type SecurityMode = 'fast' | 'strict';
 export type PermissionMode = 'auto' | 'plan' | 'dangerously-skip-permissions';
 export type RunGoal = 'full-build' | 'plan-only';
+/**
+ * What a run does when a member that asked to be isolated cannot be: pause and
+ * ask, or refuse to continue at all. There is no silent option — that was the
+ * bug this setting exists to close.
+ */
+export type IsolationPolicy = 'ask' | 'required';
 export type StopAfterPhase = 'none' | 'plan-review';
 export type PipelineStatus = 'idle' | 'running' | 'paused' | 'awaiting-audit-decision' | 'complete' | 'failed';
 export type ResumeAction = 'none' | 'continue-approved-plan' | 'resume-stalled-turn' | 'audit-send-to-c' | 'audit-dismiss' | 'audit-deploy';
@@ -67,6 +73,7 @@ export interface PipelineState {
   projectDir: string;
   currentPhase: Phase;
   securityMode: SecurityMode;
+  isolationPolicy: IsolationPolicy;
   runGoal: RunGoal;
   runFinalAudit: boolean;
   stopAfterPhase: StopAfterPhase;
@@ -104,6 +111,7 @@ const EMPTY_STATE: PipelineState = {
   projectDir: '',
   currentPhase: 'concept',
   securityMode: 'fast',
+  isolationPolicy: 'ask',
   runGoal: 'full-build',
   runFinalAudit: false,
   stopAfterPhase: 'none',
@@ -237,11 +245,23 @@ export function usePipelineState({ pollInterval = 1500, mode, model }: UsePipeli
     return res.json();
   }, [mode, model]);
 
-  const startPipeline = useCallback(async (securityMode: SecurityMode, runGoal: RunGoal, permissionMode?: PermissionMode, runFinalAudit?: boolean) => {
+  const startPipeline = useCallback(async (
+    securityMode: SecurityMode,
+    runGoal: RunGoal,
+    permissionMode?: PermissionMode,
+    runFinalAudit?: boolean,
+    isolationPolicy?: IsolationPolicy,
+  ) => {
     const res = await fetch('/api/start-pipeline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ securityMode, permissionMode, runGoal, runFinalAudit: runFinalAudit === true }),
+      body: JSON.stringify({
+        securityMode,
+        permissionMode,
+        runGoal,
+        runFinalAudit: runFinalAudit === true,
+        isolationPolicy: isolationPolicy === 'required' ? 'required' : 'ask',
+      }),
     });
     return res.json();
   }, []);
