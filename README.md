@@ -24,6 +24,15 @@ auto-accept, attach your UI guidelines as a skill, and give him a role prompt
 you wrote. Create `pat` as a planner on Opus who only ever writes the plan.
 Nothing is hardcoded — not the names, not the count, not the capabilities.
 
+**Or describe the job and let it draft one.** Tell it what you are building and
+you get a proposed team back — who is needed, which seat each one takes, what
+model they run on, a role written for that job, and any skills worth attaching.
+Nobody is created until you have read the proposal. The model is never asked
+what anyone is permitted to do: capabilities come from the seat, and the schema
+it answers has no field for them, so drafting a team cannot widen what the team
+can reach. Switch on **Auto team creation** and the offer appears whenever the
+roster cannot staff a run.
+
 **Skills are per member.** Each member's skills are packaged as a Claude Code
 plugin loaded with `--plugin-dir` for that session only. Attaching a long
 document to one member costs about fifteen tokens of context until they

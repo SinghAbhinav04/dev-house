@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
 import { useTeam, type TeamMemberView } from '@/lib/use-team';
+import type { TeamProposal } from '@/lib/team/proposal';
 import {
   EFFORT_LEVELS,
   MAX_TEAM_SIZE,
@@ -46,11 +47,14 @@ export default function TeamPage() {
     removeSkill,
     setSlotEnabled,
     setTeamModel,
+    setAutoTeam,
     setTheme,
+    reload,
   } = useTeam();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [drafting, setDrafting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const officeFull = team.members.length >= MAX_TEAM_SIZE;
@@ -108,6 +112,23 @@ export default function TeamPage() {
         </div>
       )}
 
+      {/* The setting's whole effect: an offer, made at the moment it is useful.
+          Nothing is created without going through the review below. */}
+      {team.roster.workflow.autoTeam && !drafting && !officeFull && team.plan.errors.length > 0 && (
+        <div className="mx-auto mt-4 flex max-w-7xl flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent-soft px-4 py-3 text-sm">
+          <span className="flex-1 text-ink-soft">
+            {team.plan.errors[0]} Describe the job and have a team drafted for it instead.
+          </span>
+          <button
+            type="button"
+            onClick={() => { setDrafting(true); setCreating(false); }}
+            className="shrink-0 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-sunken transition-opacity hover:opacity-90"
+          >
+            Draft a team
+          </button>
+        </div>
+      )}
+
       <main className="mx-auto grid max-w-7xl gap-6 px-6 py-6 lg:grid-cols-[260px_minmax(0,1fr)]">
         {/* ── Roster ─────────────────────────────────────────────── */}
         <aside className="space-y-4">
@@ -119,15 +140,26 @@ export default function TeamPage() {
                   {team.members.length}/{MAX_TEAM_SIZE}
                 </span>
               </h2>
-              <button
-                type="button"
-                disabled={officeFull}
-                onClick={() => setCreating(true)}
-                title={officeFull ? OFFICE_FULL_MESSAGE : undefined}
-                className="rounded-md bg-accent px-2 py-1 text-xs font-medium text-surface-sunken transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                + New
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={officeFull}
+                  onClick={() => { setDrafting(true); setCreating(false); }}
+                  title={officeFull ? OFFICE_FULL_MESSAGE : 'Describe the job and have a team drafted for it'}
+                  className="rounded-md border border-accent/40 px-2 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Draft
+                </button>
+                <button
+                  type="button"
+                  disabled={officeFull}
+                  onClick={() => { setCreating(true); setDrafting(false); }}
+                  title={officeFull ? OFFICE_FULL_MESSAGE : undefined}
+                  className="rounded-md bg-accent px-2 py-1 text-xs font-medium text-surface-sunken transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  + New
+                </button>
+              </div>
             </div>
 
             {loading ? (
@@ -176,7 +208,9 @@ export default function TeamPage() {
           <TeamSettings
             teamModel={team.roster.teamModel}
             theme={team.roster.theme || 'warm'}
+            autoTeam={team.roster.workflow.autoTeam === true}
             onTeamModel={setTeamModel}
+            onAutoTeam={setAutoTeam}
             onTheme={(value) => {
               document.documentElement.setAttribute('data-theme', value);
               setTheme(value);
@@ -195,7 +229,17 @@ export default function TeamPage() {
 
         {/* ── Detail ─────────────────────────────────────────────── */}
         <section className="min-w-0">
-          {creating ? (
+          {drafting ? (
+            <DraftTeamPanel
+              onCancel={() => setDrafting(false)}
+              onApplied={async (created) => {
+                await reload();
+                setDrafting(false);
+                if (created[0]) setSelectedId(created[0]);
+                setToast(`Created ${created.length} member${created.length === 1 ? '' : 's'}. Read their roles before you run.`);
+              }}
+            />
+          ) : creating ? (
             <CreateMemberForm
               templates={team.templates}
               onCancel={() => setCreating(false)}
@@ -249,17 +293,36 @@ export default function TeamPage() {
 function TeamSettings({
   teamModel,
   theme,
+  autoTeam,
   onTeamModel,
+  onAutoTeam,
   onTheme,
 }: {
   teamModel: string;
   theme: string;
+  autoTeam: boolean;
   onTeamModel: (value: string) => void;
+  onAutoTeam: (value: boolean) => void;
   onTheme: (value: string) => void;
 }) {
   return (
     <section className="space-y-3 rounded-xl border border-line bg-surface-raised p-3">
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-faint">Whole team</h2>
+
+      <Field
+        label="Auto team creation"
+        hint="Offers to draft a team when the roster cannot staff a run. Drafts are always reviewed before anyone is created."
+      >
+        <label className="flex items-center gap-2 text-sm text-ink-soft">
+          <input
+            type="checkbox"
+            checked={autoTeam}
+            onChange={(e) => onAutoTeam(e.target.checked)}
+            className="accent-[var(--accent)]"
+          />
+          {autoTeam ? 'On' : 'Off'}
+        </label>
+      </Field>
 
       <Field label="Model" hint="Used by any member who has not picked their own.">
         <select
@@ -919,6 +982,175 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
       <dt className="text-[11px] uppercase tracking-wider text-ink-faint">{label}</dt>
       <dd className="mt-0.5 font-mono text-sm text-ink">{value}</dd>
       {hint && <dd className="text-[10px] text-ink-faint">{hint}</dd>}
+    </div>
+  );
+}
+
+/**
+ * Draft a team from a description of the job.
+ *
+ * The model proposes; this shows what it proposed; creating it is a separate
+ * click. Nothing here can set capabilities — the proposal has no field for
+ * them and the server derives them from the seat — so reviewing is about
+ * whether these are the right people, not about what they would be allowed to
+ * do.
+ */
+function DraftTeamPanel({
+  onCancel,
+  onApplied,
+}: {
+  onCancel: () => void;
+  onApplied: (created: string[]) => void | Promise<void>;
+}) {
+  const [requirements, setRequirements] = useState('');
+  const [proposal, setProposal] = useState<TeamProposal | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<'draft' | 'apply' | null>(null);
+
+  async function post(body: Record<string, unknown>) {
+    const res = await fetch('/api/team-proposal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { ok: res.ok, data: (await res.json()) as Record<string, unknown> };
+  }
+
+  async function draft() {
+    setBusy('draft');
+    setError(null);
+    const { ok, data } = await post({ action: 'draft', requirements });
+    setBusy(null);
+
+    if (!ok) {
+      setError(String(data.error || 'The draft failed.'));
+      setWarnings(Array.isArray(data.warnings) ? (data.warnings as string[]) : []);
+      return;
+    }
+
+    setProposal(data.proposal as TeamProposal);
+    setWarnings(Array.isArray(data.warnings) ? (data.warnings as string[]) : []);
+  }
+
+  async function apply() {
+    if (!proposal) return;
+    setBusy('apply');
+    setError(null);
+    const { ok, data } = await post({ action: 'apply', proposal });
+    setBusy(null);
+
+    if (!ok) {
+      setError(String(data.error || 'Creating the team failed.'));
+      return;
+    }
+
+    const failed = (data.failed as Array<{ id: string; error: string }>) || [];
+    if (failed.length > 0) setError(failed.map((f) => `${f.id}: ${f.error}`).join(' · '));
+    await onApplied((data.created as string[]) || []);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-line bg-surface-raised p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Draft a team</h2>
+            <p className="mt-1 text-xs text-ink-faint">
+              Describe the job. You get a proposed team to look at — nobody is created until you say so.
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} className="text-xs text-ink-faint underline">
+            cancel
+          </button>
+        </div>
+
+        <textarea
+          value={requirements}
+          onChange={(e) => setRequirements(e.target.value)}
+          rows={4}
+          placeholder="A Next.js dashboard that reads from a Postgres database. I care about the UI being consistent and about the queries not being slow. No design system yet."
+          className="mt-4 w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+        />
+
+        <div className="mt-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void draft()}
+            disabled={busy !== null || requirements.trim().length < 12}
+            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-surface-sunken transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy === 'draft' ? 'Drafting…' : proposal ? 'Draft again' : 'Draft team'}
+          </button>
+          <span className="text-[11px] text-ink-faint">
+            {busy === 'draft' ? 'One model turn — this takes a moment.' : 'Uses the team default model.'}
+          </span>
+        </div>
+
+        {error && <p className="mt-3 text-xs text-signal-bad">{error}</p>}
+      </div>
+
+      {proposal && (
+        <div className="rounded-xl border border-line bg-surface-raised p-5">
+          {proposal.summary && <p className="text-sm leading-relaxed text-ink-soft">{proposal.summary}</p>}
+
+          <ul className="mt-4 space-y-3">
+            {proposal.members.map((member) => (
+              <li key={member.id} className="rounded-lg border border-line bg-surface p-3">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-sm font-semibold text-ink">{member.name}</span>
+                  <span className="text-[11px] text-ink-faint">
+                    {member.id} · {member.slot ? SLOT_LABELS[member.slot] : 'no slot'}
+                    {member.title && ` · ${member.title}`} · {member.model || 'team default'} · {member.effort}
+                  </span>
+                </div>
+                {member.role && (
+                  <p className="mt-2 line-clamp-3 whitespace-pre-line text-xs leading-relaxed text-ink-soft">
+                    {member.role}
+                  </p>
+                )}
+                {member.skills.length > 0 && (
+                  <p className="mt-2 text-[11px] text-ink-faint">
+                    Skills: {member.skills.map((s) => s.name).join(', ')}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {warnings.length > 0 && (
+            <ul className="mt-4 space-y-1 border-t border-line pt-3 text-[11px] text-signal-warn">
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+
+          <p className="mt-4 text-[11px] leading-relaxed text-ink-faint">
+            What each member is allowed to touch comes from their seat and is enforced by the hook. A proposal cannot
+            ask for permissions, so this is only about who the team is.
+          </p>
+
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => void apply()}
+              disabled={busy !== null}
+              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-surface-sunken transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {busy === 'apply' ? 'Creating…' : `Create ${proposal.members.length} member${proposal.members.length === 1 ? '' : 's'}`}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setProposal(null); setWarnings([]); }}
+              disabled={busy !== null}
+              className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-soft transition-colors hover:bg-surface disabled:opacity-40"
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

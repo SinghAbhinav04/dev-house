@@ -163,6 +163,7 @@ export async function POST(req: NextRequest) {
           workflow: {
             ...roster.workflow,
             ...(body.runGoal === 'plan-only' || body.runGoal === 'full-build' ? { runGoal: body.runGoal } : {}),
+            ...(typeof body.autoTeam === 'boolean' ? { autoTeam: body.autoTeam } : {}),
           },
         });
         break;

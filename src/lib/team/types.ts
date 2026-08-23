@@ -163,6 +163,12 @@ export interface WorkflowConfig {
   runGoal: RunGoal;
   /** Pause the run once this slot's phase completes. */
   stopAfterSlot: SlotId | 'none';
+  /**
+   * Offer to draft a team from a description of the job when the roster
+   * cannot staff a run. Drafting always ends in a proposal you approve — this
+   * decides whether the offer appears, never whether members are created.
+   */
+  autoTeam?: boolean;
 }
 
 export interface Roster {

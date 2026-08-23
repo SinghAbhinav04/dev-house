@@ -199,6 +199,7 @@ function normalizeWorkflow(raw: unknown, members: TeamMember[]): WorkflowConfig 
     slots,
     runGoal: oneOf(input.runGoal, ['full-build', 'plan-only'] as const, DEFAULT_WORKFLOW.runGoal),
     stopAfterSlot: isSlotId(input.stopAfterSlot) ? input.stopAfterSlot : 'none',
+    autoTeam: input.autoTeam === true,
   };
 }
 

@@ -138,6 +138,7 @@ export function useTeam() {
 
     setSlotEnabled: (slot: SlotId, enabled: boolean) => act({ action: 'slot', slot, enabled }),
     setTeamModel: (teamModel: string) => act({ action: 'workflow', teamModel }),
+    setAutoTeam: (autoTeam: boolean) => act({ action: 'workflow', autoTeam }),
     setTheme: (theme: string) => act({ action: 'workflow', theme }),
     setRunGoal: (runGoal: string) => act({ action: 'workflow', runGoal }),
   };
