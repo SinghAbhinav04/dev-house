@@ -147,6 +147,17 @@ function isVisible(state: ReturnType<typeof normalizeState>): boolean {
   );
 }
 
+/**
+ * The last state that parsed cleanly, per file.
+ *
+ * Writers go through `writeJsonAtomic` now, so a torn read should not happen.
+ * If one does — a truncated file from an older run, a disk error, a writer that
+ * did not use the helper — a stale frame is far better than an empty one: this
+ * value is pushed over SSE and applied as a wholesale replace, so returning
+ * EMPTY_STATE blanked the entire viewer for a frame.
+ */
+const lastGoodState = new Map<string, ReturnType<typeof normalizeState>>();
+
 export function readCurrentState(mode: string) {
   const file = resolveStateFile(mode);
   if (!file) return EMPTY_STATE;
@@ -155,12 +166,11 @@ export function readCurrentState(mode: string) {
   try {
     raw = JSON.parse(readFileSync(file, 'utf8'));
   } catch {
-    // A partially-written file is expected: the orchestrator rewrites the whole
-    // thing on every event, so a reader can catch it mid-write.
-    return EMPTY_STATE;
+    return lastGoodState.get(file) ?? EMPTY_STATE;
   }
 
   const state = normalizeState(raw);
+  lastGoodState.set(file, state);
 
   // Manual and staging states are always shown; only real projects are gated.
   if (mode === 'manual' || file.startsWith(STAGING_DIR)) return state;

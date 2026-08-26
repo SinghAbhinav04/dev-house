@@ -1,11 +1,12 @@
 import { spawn, execFileSync, execSync } from 'child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 
 import { readRoster } from './team/roster.ts';
 import { resolveSlot } from './team/slots.ts';
 import { writeTeamManifest } from './team/manifest.ts';
+import { writeJsonAtomic } from './atomic-write.ts';
 
 /** Event author for orchestrator-side supervisor narration. */
 function supervisorEventAgent(): string {
@@ -33,7 +34,7 @@ function readJson(file: string): Record<string, unknown> | null {
 }
 
 function writeJson(file: string, data: Record<string, unknown>) {
-  writeFileSync(file, JSON.stringify(data, null, 2));
+  writeJsonAtomic(file, data);
 }
 
 export function findLatestProject(): string | null {
@@ -129,12 +130,16 @@ export function startPipelineRun(options: {
   const stagingEvents = join(STAGING_DIR, 'pipeline-events.json');
   const stagingState = readJson(stagingEvents);
   if (!stagingState) {
-    return { success: false, error: 'No staging session found. Talk to S or A first.' };
+    return { success: false, error: 'Nothing to build yet — describe what you want in the chat first.' };
   }
 
   const concept = String(stagingState.concept || '').trim();
   const sessions = (stagingState.sessions as Record<string, string> | undefined) || {};
-  const aSession = sessions.A || '';
+  // Sessions are keyed by member id. `sessions.A` was left over from fixed
+  // letter members and never matched, so the planner's concept conversation
+  // was silently dropped on the way into every run.
+  const plannerId = resolveSlot(readRoster(), 'planner')?.id;
+  const aSession = (plannerId && sessions[plannerId]) || '';
 
   if (!concept) {
     return { success: false, error: 'No build concept found yet.' };

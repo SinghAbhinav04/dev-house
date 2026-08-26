@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 
 import {
   MAX_AUTO_RESUMES,
+  MAX_BASH_APPROVAL_RETRIES,
+  MAX_CODE_REVIEW_ROUNDS,
+  MAX_REVIEW_ROUNDS,
+  MAX_TEST_ROUNDS,
   TURN_IDLE_TIMEOUT_MS,
   buildResumePrompt,
   describeCurrentTask,
@@ -24,6 +28,22 @@ assert.equal(canAutoResumeTurn('coder', 'coding'), false);
 assert.equal(canAutoResumeTurn('auditor', 'security-audit'), true);
 assert.equal(canAutoResumeTurn('auditor', 'planning'), false);
 
+// This takes a SLOT, never a member id. The orchestrator's stall watcher used
+// to pass `member.id` — a user-authored slug that matches no slot name — so
+// the answer was always false, and the watcher's non-resumable branch then
+// abandoned the turn without resolving it or killing the child. A wedged
+// session hung the whole run with no timeout behind it.
+assert.equal(
+  canAutoResumeTurn('reacty', 'plan-review'),
+  false,
+  'a member id is not a slot, so passing one silently disables auto-resume',
+);
+assert.equal(
+  canAutoResumeTurn('pat', 'planning'),
+  false,
+  'the same trap for the planner slot',
+);
+
 assert.equal(shouldMarkTurnStalled(0, TURN_IDLE_TIMEOUT_MS - 1), false);
 assert.equal(shouldMarkTurnStalled(0, TURN_IDLE_TIMEOUT_MS), true);
 
@@ -31,6 +51,23 @@ assert.match(buildResumePrompt('planner', 'planning'), /Do not repeat research/i
 assert.match(buildResumePrompt('reviewer', 'plan-review'), /Output your verdict immediately/i);
 assert.match(buildResumePrompt('auditor', 'security-audit'), /Output your verdict immediately/i);
 assert.equal(MAX_AUTO_RESUMES, 3);
+
+// ── Loop budgets ─────────────────────────────────────────────────────
+//
+// Plan review, code review and testing are `while (!approved)` loops. They ran
+// with no cap, no wall clock and no no-progress detector, so a reviewer and a
+// planner that could not agree burned two full turns per round forever. The
+// only things that ever ended a divergent loop were accidents: an unparseable
+// verdict being read as approval, or the user hitting Stop.
+for (const [name, cap] of [
+  ['MAX_REVIEW_ROUNDS', MAX_REVIEW_ROUNDS],
+  ['MAX_CODE_REVIEW_ROUNDS', MAX_CODE_REVIEW_ROUNDS],
+  ['MAX_TEST_ROUNDS', MAX_TEST_ROUNDS],
+  ['MAX_BASH_APPROVAL_RETRIES', MAX_BASH_APPROVAL_RETRIES],
+]) {
+  assert.equal(typeof cap, 'number', `${name} is defined`);
+  assert.ok(cap > 0 && Number.isFinite(cap), `${name} is a real bound, not Infinity`);
+}
 
 // ── What each member is working on ───────────────────────────────────
 

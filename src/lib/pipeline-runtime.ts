@@ -37,6 +37,27 @@ export const EMPTY_RUNTIME: PipelineRuntimeState = {
 export const TURN_IDLE_TIMEOUT_MS = 300_000;
 export const MAX_AUTO_RESUMES = 3;
 
+/**
+ * How many times a verdict loop may go round before the run pauses.
+ *
+ * Each round is two full turns on ever-growing resumed sessions, so a pair
+ * that cannot agree burns tokens indefinitely with nothing to show for it.
+ * Exhausting a cap is never an approval — the run pauses and hands the
+ * disagreement back to the user, because "they stopped arguing" and "the work
+ * is good" are not the same event.
+ */
+export const MAX_REVIEW_ROUNDS = 5;
+export const MAX_CODE_REVIEW_ROUNDS = 5;
+export const MAX_TEST_ROUNDS = 5;
+
+/**
+ * How many times a member may re-request the same Bash command in strict mode
+ * before the run gives up on it. The grant is matched on the exact command
+ * string, so a member that keeps drifting the whitespace would otherwise raise
+ * an approval card forever, each one blocking the run for up to an hour.
+ */
+export const MAX_BASH_APPROVAL_RETRIES = 3;
+
 export function summarizePrompt(prompt: string, maxLength: number = 140): string {
   const normalized = prompt.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return normalized;

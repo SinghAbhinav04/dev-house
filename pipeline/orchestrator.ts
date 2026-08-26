@@ -30,10 +30,19 @@ import {
   type ApprovedBashGrant,
   type PendingApproval,
 } from '../src/lib/pipeline-approval.ts';
-import { extractStructuredSignal } from '../src/lib/pipeline-signal.ts';
+import {
+  extractStructuredSignal,
+  isPositiveSignal,
+  isUnparseableSignal,
+  parseTextSignal,
+} from '../src/lib/pipeline-signal.ts';
 import {
   EMPTY_RUNTIME,
   MAX_AUTO_RESUMES,
+  MAX_BASH_APPROVAL_RETRIES,
+  MAX_CODE_REVIEW_ROUNDS,
+  MAX_REVIEW_ROUNDS,
+  MAX_TEST_ROUNDS,
   TURN_IDLE_TIMEOUT_MS,
   buildResumePrompt,
   canAutoResumeTurn,
@@ -61,6 +70,7 @@ import { writeTeamManifest } from '../src/lib/team/manifest.ts';
 import { memberSpawnOptions } from '../src/lib/team/spawn.ts';
 import { ensureMemoryDirs, ingestInbox, withMemory } from '../src/lib/team/memory.ts';
 import { summarizeToolResult } from '../src/lib/events.ts';
+import { writeJsonAtomic } from '../src/lib/atomic-write.ts';
 import {
   billableTokens,
   emptyBreakdown,
@@ -127,6 +137,24 @@ function slotOf(memberId: string): SlotId | null {
 /** The saved Claude session for whoever fills a slot. */
 function sessionFor(slot: SlotId): string | undefined {
   return state.sessions[id(slot)] || undefined;
+}
+
+/**
+ * The session to resume for a slot that is expected to have one.
+ *
+ * Sessions are keyed by member id. This used to be read as `state.sessions.C`
+ * and friends, left over from when members were fixed letters — which was
+ * silently always undefined, so every turn that meant to continue a
+ * conversation started a fresh one and re-read the plan and the code from
+ * scratch. The emit is the tripwire: if that ever happens again it says so in
+ * the log rather than just costing tokens.
+ */
+function resumeFor(slot: SlotId, why: string): string | undefined {
+  const session = sessionFor(slot);
+  if (!session) {
+    emit('system', state.currentPhase, 'status', `No saved session for ${slotLabel(slot)} — ${why} starts cold`);
+  }
+  return session;
 }
 
 /** Members already warned about their budget, so it is said once, not per turn. */
@@ -217,7 +245,10 @@ if (projectDirIdx !== -1) {
   try {
     const existing = JSON.parse(readFileSync(join(projectDir, 'pipeline-events.json'), 'utf8'));
     concept = existing.concept || 'Build from viewer';
-    if (!existingASession) existingASession = existing.sessions?.A || '';
+    // Keyed by member id, like every other session. The old `sessions.A`
+    // lookup dated from fixed-letter members and never matched a real roster,
+    // so a resumed run always threw away the planner's concept-phase session.
+    if (!existingASession) existingASession = existing.sessions?.[id('planner')] || '';
     if (existing.securityMode === 'strict') securityMode = 'strict';
     // Only treat as a resume if the state has an explicit resume action
     resumingExistingProject =
@@ -353,7 +384,19 @@ const eventsFile = join(projectDir, 'pipeline-events.json');
 let state: PipelineState;
 if (resumingExistingProject && existsSync(eventsFile)) {
   // Launched from viewer — load existing state (has Phase 0 events + sessions)
-  const existing = JSON.parse(readFileSync(eventsFile, 'utf8'));
+  //
+  // Guarded: this runs at module scope, before `run()`, so an unhandled throw
+  // here kills the process without reaching the fatal handler at the bottom of
+  // the file — leaving `pipelineStatus: 'running'` on disk and a viewer showing
+  // a live run forever. A resume that cannot read its own state should say so.
+  let existing;
+  try {
+    existing = JSON.parse(readFileSync(eventsFile, 'utf8'));
+  } catch (err) {
+    console.error(`\n[FATAL] Could not read ${eventsFile}: ${(err as Error).message}`);
+    console.error('The run state is unreadable, so there is nothing to resume from.');
+    process.exit(1);
+  }
   state = {
     concept: existing.concept || concept,
     projectDir: existing.projectDir || projectDir,
@@ -460,7 +503,7 @@ function rotateEventsIfNeeded() {
 
 function flush() {
   rotateEventsIfNeeded();
-  writeFileSync(eventsFile, JSON.stringify(state, null, 2));
+  writeJsonAtomic(eventsFile, state);
 }
 
 function emit(
@@ -681,7 +724,10 @@ async function runClaudeTurn(
       if (bashInFlight) { lastStreamActivityAt = Date.now(); return; }
       if (!shouldMarkTurnStalled(lastStreamActivityAt, Date.now(), TURN_IDLE_TIMEOUT_MS)) return;
 
-      const canAutoResume = canAutoResumeTurn(agent, state.currentPhase) && !!currentSessionId;
+      // Keyed on the slot, not the member id: the question is whether this job
+      // can be picked up again, and member ids are user-authored slugs that
+      // never match a slot name.
+      const canAutoResume = canAutoResumeTurn(slot, state.currentPhase) && !!currentSessionId;
       const reason = canAutoResume
         ? `Agent ${agent} appears stalled. Preserving the session for resume.`
         : `Agent ${agent} appears stalled. Manual intervention may be needed.`;
@@ -689,16 +735,20 @@ async function runClaudeTurn(
       markActiveTurnStalled(agent, reason);
       emit('system', state.currentPhase, 'status', reason);
 
-      if (!canAutoResume) {
-        clearInterval(stallWatcher);
-        return;
-      }
-
+      // Either way the turn is over. A stalled turn that cannot be auto-resumed
+      // still has to settle and still has to kill the child — abandoning the
+      // promise here leaves the orchestrator waiting on a wedged session with
+      // no timeout behind it. `claude()` turns the un-resumable case into a
+      // failed run; that is the caller's decision, not this watcher's.
       stalled = true;
       settled = true;
       clearInterval(stallWatcher);
+      rl.close();
       resolve({
         result: '',
+        // Reported either way. `claude()` re-checks whether the slot may
+        // auto-resume before using it, and a preserved id is what makes a
+        // manual "resume stalled run" possible after the run gives up.
         sessionId: currentSessionId,
         structured,
         permissionDenied,
@@ -873,6 +923,7 @@ async function runClaudeTurn(
     child.on('close', (code) => {
       if (settled) return;
       clearInterval(stallWatcher);
+      rl.close();
 
       const combinedFailureText = `${diagnosticTail}\n${stderr}\n${String(lastResult?.result || '')}`;
       if (canFallbackToHost && isRecoverableDockerAuthFailure(combinedFailureText)) {
@@ -892,6 +943,10 @@ async function runClaudeTurn(
       }
 
       if (code !== 0 || !lastResult) {
+        // Settle on the reject path too. Without this a later 'error' event
+        // gets past the `if (settled) return` guard and emits a second failure
+        // for the same turn.
+        settled = true;
         clearActiveTurn(agent);
         emit('system', state.currentPhase, 'failure', `Agent ${agent} failed (exit ${code})`);
         if (stderr) console.error(stderr.slice(0, 500));
@@ -914,7 +969,9 @@ async function runClaudeTurn(
 
     child.on('error', (err) => {
       if (settled) return;
+      settled = true;
       clearInterval(stallWatcher);
+      rl.close();
       clearActiveTurn(agent);
       emit('system', state.currentPhase, 'failure', `Failed to spawn agent ${agent}: ${err.message}`);
       reject(err);
@@ -1008,6 +1065,8 @@ async function claude(
   let currentResume = opts.resume;
   let autoResumeCount = 0;
   let forceHost = false;
+  let verdictRetried = false;
+  let bashApprovalRounds = 0;
 
   while (true) {
     // Isolation that was asked for and cannot be given is decided before the
@@ -1080,6 +1139,23 @@ async function claude(
       turn.interruptedForApproval;
 
     if (!strictBashApproval) {
+      // A turn that was asked for a verdict and produced nothing readable gets
+      // one more chance to answer the question before the phase gives up.
+      // Cheaper than failing the run, and it happens in one place rather than
+      // at each of the six gates that consume a verdict.
+      if (
+        opts.jsonSchema &&
+        !verdictRetried &&
+        !turn.structured &&
+        isUnparseableSignal(parseSignal(turn.result))
+      ) {
+        verdictRetried = true;
+        currentResume = turn.sessionId || currentResume;
+        currentPrompt = VERDICT_RETRY_PROMPT;
+        emit('system', state.currentPhase, 'status', `${who} did not return a readable verdict — asking again`);
+        continue;
+      }
+
       // Fold anything this member recorded into the shared index now, while no
       // session is running — the index has exactly one writer by construction.
       absorbMemoryInbox(who);
@@ -1089,6 +1165,20 @@ async function claude(
         sessionId: turn.sessionId,
         structured: turn.structured,
       };
+    }
+
+    // The grant is matched on the exact command string, so a member that keeps
+    // re-asking with slightly different whitespace never satisfies it and
+    // raises a fresh card every round — each one blocking the run for up to an
+    // hour. Bound it rather than trusting the member to give up.
+    bashApprovalRounds += 1;
+    if (bashApprovalRounds > MAX_BASH_APPROVAL_RETRIES) {
+      emit('system', state.currentPhase, 'failure', `${who} asked for Bash approval ${bashApprovalRounds} times without getting past it`);
+      emitSupervisor(
+        state.currentPhase,
+        `${who} keeps asking to run a command and is not getting anywhere with it, so I stopped rather than keep putting the same question in front of you. Either give that member a wider Bash capability on the Team page, or run the run in fast mode.`
+      );
+      throw new Error(`${who} exceeded the Bash approval retry limit`);
     }
 
     const pending: PendingApproval = {
@@ -1201,41 +1291,50 @@ const AUDIT_SCHEMA = {
 
 // ── Helper ──────────────────────────────────────────────────────────
 
+/**
+ * Sent when a turn that owed a verdict answered with something unreadable.
+ *
+ * Deliberately says nothing about what the answer should be — an unparseable
+ * turn is a formatting failure, and a retry prompt that hints at a preferred
+ * verdict would turn it into a correctness one.
+ */
+const VERDICT_RETRY_PROMPT = [
+  'Your last message did not contain the JSON verdict this step requires.',
+  'Do not redo any work. Do not change your conclusion.',
+  'Reply with ONLY the JSON object for the verdict you already reached.',
+].join('\n');
+
+/**
+ * Read a verdict out of a turn's text output, and say so in the log when there
+ * isn't one. The parsing itself lives in `pipeline-signal.ts` so it can be
+ * tested without booting an orchestrator.
+ */
 function parseSignal(result: string): Record<string, unknown> {
-  // Try direct JSON parse
-  try {
-    return JSON.parse(result);
-  } catch {
-    // Try to find JSON embedded in text
-    const match = result.match(/\{[\s\S]*"status"\s*:\s*"[^"]+"/);
-    if (match) {
-      try {
-        let depth = 0;
-        const start = result.indexOf(match[0]);
-        for (let i = start; i < result.length; i++) {
-          if (result[i] === '{') depth++;
-          if (result[i] === '}') depth--;
-          if (depth === 0) {
-            return JSON.parse(result.slice(start, i + 1));
-          }
-        }
-      } catch {}
-    }
-    // Try to detect positive/negative signals from text
-    const lower = result.toLowerCase();
-    if (lower.includes('all tests pass') || lower.includes('tests passed') || lower.includes('approved') || lower.includes('code is correct')) {
-      emit('system', state.currentPhase, 'status', 'Parsed positive signal from text');
-      return { status: 'approved' };
-    }
-    emit('system', state.currentPhase, 'status', 'Could not parse signal — treating as approved');
-    return { status: 'approved' };
+  const signal = parseTextSignal(result);
+  if (isUnparseableSignal(signal)) {
+    emit('system', state.currentPhase, 'status', 'Could not parse a verdict from this turn');
   }
+  return signal;
 }
 
-// Normalize signal status — treat approved/passed as the same positive result
-function isPositiveSignal(signal: Record<string, unknown>): boolean {
-  const s = (signal.status as string || '').toLowerCase();
-  return s === 'approved' || s === 'passed';
+/**
+ * Stop the run when a gate could not read a verdict.
+ *
+ * `claude()` already gave the member a second chance to answer in JSON, so
+ * reaching here means two turns produced nothing readable. Every alternative
+ * is worse: treating it as approval certifies unreviewed work, and treating it
+ * as a rejection sends an empty issue list round a loop that cannot converge
+ * because there is nothing to fix.
+ */
+function requireVerdict(signal: unknown, who: string, gate: string): Record<string, unknown> {
+  if (!isUnparseableSignal(signal)) return signal as Record<string, unknown>;
+
+  emit('system', state.currentPhase, 'failure', `${who} returned no readable verdict for ${gate}`);
+  emitSupervisor(
+    state.currentPhase,
+    `I stopped the run. ${who} finished the ${gate} step but never gave a verdict I could read, twice. I will not record that as a pass — ask me to resume once you have looked at what they actually said.`
+  );
+  throw new Error(`${who} returned no readable verdict for ${gate}`);
 }
 
 /** Most recent concept-phase turns re-fed to the planner, and per-turn cap. */
@@ -1463,7 +1562,11 @@ async function runPlanReviewPhase(
     bSession = bResult.sessionId;
     saveSession(id('reviewer'), bSession);
 
-    const signal = bResult.structured || parseSignal(bResult.result);
+    const signal = requireVerdict(
+      bResult.structured || parseSignal(bResult.result),
+      slotLabel('reviewer'),
+      'plan review'
+    );
 
     if (isPositiveSignal(signal)) {
       planApproved = true;
@@ -1479,6 +1582,21 @@ async function runPlanReviewPhase(
     });
 
     emit(id('reviewer'), 'plan-review', 'send', `Sent ${questions.length} question(s) to A`);
+
+    // Not approving on exhaustion. A reviewer and a planner that cannot agree
+    // in five rounds are not one round away from agreeing, and the plan is the
+    // contract everything downstream is built against.
+    if (reviewRound >= MAX_REVIEW_ROUNDS) {
+      state.activeAgent = '';
+      setPipelineStatus('paused');
+      emit('system', 'plan-review', 'failure', `Plan review did not converge after ${reviewRound} rounds`);
+      emitSupervisor(
+        'plan-review',
+        `${slotLabel('reviewer')} and ${slotLabel('planner')} have been round the plan ${reviewRound} times without agreeing, so I paused rather than let it run on. The open questions are: ${questions.join(' | ') || 'not stated'}. Read the plan and tell me whether to continue or change the brief.`
+      );
+      flush();
+      return { aSession, bSession, reviewRound, paused: true };
+    }
 
     setAgent(id('planner'), 'active');
     emit(id('planner'), 'plan-review', 'receive', `Received ${questions.length} question(s) from B`);
@@ -1568,7 +1686,13 @@ async function runSecurityAudit(): Promise<{ paused: boolean }> {
   });
   saveSession(id('auditor'), auditResult.sessionId);
 
-  const signal = auditResult.structured || parseSignal(auditResult.result);
+  // An unreadable audit must never reach the `findings.length === 0` branch
+  // below, which announces AUDIT CLEAN. Silence is not a clean bill of health.
+  const signal = requireVerdict(
+    auditResult.structured || parseSignal(auditResult.result),
+    slotLabel('auditor'),
+    'the security audit'
+  );
   const findings: AuditFinding[] = [];
 
   if (!isPositiveSignal(signal)) {
@@ -1698,7 +1822,9 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   emitSupervisor('security-audit', `C is applying a scoped fix for finding ${finding.id} (${finding.severity}).`);
   flush();
 
-  const cSession = state.sessions?.C;
+  // The coder wrote this code. Resuming is what lets it fix the finding
+  // instead of rediscovering its own build from the filesystem.
+  const cSession = resumeFor('coder', 'the scoped fix');
   const cPrompt = [
     'The auditor flagged a security finding that the user asked you to fix.',
     'Fix ONLY this finding. Do not touch anything else. Do not modify plan.md.',
@@ -1716,7 +1842,7 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   flush();
 
   setAgent(id('tester'), 'active');
-  const dSession = state.sessions?.D;
+  const dSession = resumeFor('tester', 'the regression check');
   const dPrompt = [
     `the coder applied a scoped security fix for this finding: "${finding.text}"`,
     'Run the existing tests. Confirm nothing regressed.',
@@ -1725,6 +1851,10 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   ].join('\n');
   const dResult = await claude('tester', dPrompt, { resume: dSession, jsonSchema: TEST_SCHEMA });
   saveSession(id('tester'), dResult.sessionId);
+  // No requireVerdict here on purpose. This pass is one-shot and user-driven,
+  // so an unreadable verdict already fails closed through the branch below —
+  // the finding goes back to Open and the user decides. Throwing instead would
+  // abort a fix pass over a formatting problem.
   const dSignal = dResult.structured || parseSignal(dResult.result);
   setAgent(id('tester'), 'done');
 
@@ -1744,7 +1874,10 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   emit(id('tester'), 'security-audit', 'send', `Fix for ${finding.id} passed tests. Sending to E for re-audit.`);
   flush();
 
-  const eSession = state.sessions?.E;
+  // Unlike the first audit, a re-audit must resume: "is this the same
+  // vulnerability I raised" is a question only the session that raised it can
+  // answer.
+  const eSession = resumeFor('auditor', 're-auditing this finding');
   const ePrompt = [
     'Re-audit ONLY this finding after a scoped fix was applied.',
     `Original finding: ${finding.text}`,
@@ -1754,6 +1887,8 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   ].join('\n');
   const eResult = await claude('auditor', ePrompt, { resume: eSession, jsonSchema: AUDIT_SCHEMA });
   saveSession(id('auditor'), eResult.sessionId);
+  // Same reasoning as the test verdict above: unreadable leaves the finding
+  // still-open rather than resolving it, which is the safe direction here.
   const eSignal = eResult.structured || parseSignal(eResult.result);
   setAgent(id('auditor'), 'done');
 
@@ -1812,7 +1947,7 @@ async function runAuditDeploy(): Promise<void> {
     `Deploying. Findings: ${resolved} resolved, ${dismissed} dismissed, ${stillOpen} still open.`
   );
 
-  const aSession = state.sessions?.A || '';
+  const aSession = resumeFor('planner', 'the deploy confirmation') || '';
   await runDeployStep(aSession);
 }
 
@@ -1912,7 +2047,11 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
     dSession = dResult.sessionId;
     saveSession(id('tester'), dSession);
 
-    const signal = dResult.structured || parseSignal(dResult.result);
+    const signal = requireVerdict(
+      dResult.structured || parseSignal(dResult.result),
+      slotLabel('tester'),
+      'code review'
+    );
 
     if (isPositiveSignal(signal)) {
       codeApproved = true;
@@ -1925,6 +2064,22 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       });
 
       emit(id('tester'), 'code-review', 'send', `Sent ${issues.length} issue(s) to C`);
+
+      // Same reasoning as plan review: a loop that has not converged in five
+      // rounds is not converging, and there is real code on disk that someone
+      // should look at before another automated pass rewrites it again.
+      if (codeReviewRound >= MAX_CODE_REVIEW_ROUNDS) {
+        state.activeAgent = '';
+        setPipelineStatus('paused');
+        emit('system', 'code-review', 'failure', `Code review did not converge after ${codeReviewRound} rounds`);
+        emitSupervisor(
+          'code-review',
+          `${slotLabel('tester')} and ${slotLabel('coder')} have been round the code ${codeReviewRound} times without agreeing, so I paused. Still open: ${issues.join(' | ') || 'not stated'}. The code is on disk if you want to look before deciding.`
+        );
+        flush();
+        return { aSession, codeReviewRound, testRound: 0 };
+      }
+
       setAgent(id('coder'), 'active');
       emit(id('coder'), 'code-review', 'receive', `Received ${issues.length} issue(s) from D`);
 
@@ -1979,7 +2134,11 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
     dSession = testResult.sessionId;
     saveSession(id('tester'), dSession);
 
-    const signal = testResult.structured || parseSignal(testResult.result);
+    const signal = requireVerdict(
+      testResult.structured || parseSignal(testResult.result),
+      slotLabel('tester'),
+      'testing'
+    );
 
     if (isPositiveSignal(signal)) {
       testsPassed = true;
@@ -1993,6 +2152,22 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       });
 
       emit(id('tester'), 'testing', 'send', `Sent ${failures.length} failure(s) to C`);
+
+      // Tests that still fail after five fix rounds are telling you something
+      // the coder cannot fix by trying harder — a bad assumption in the plan,
+      // or a dependency that is not there. Pause and say so.
+      if (testRound >= MAX_TEST_ROUNDS) {
+        state.activeAgent = '';
+        setPipelineStatus('paused');
+        emit('system', 'testing', 'failure', `Tests did not pass after ${testRound} rounds`);
+        emitSupervisor(
+          'testing',
+          `${slotLabel('coder')} has had ${testRound} attempts at these failures and they are still failing, so I paused instead of going round again. Still failing: ${failures.join(' | ') || 'not stated'}. This usually means the plan assumed something that is not true.`
+        );
+        flush();
+        return { aSession, codeReviewRound, testRound };
+      }
+
       setAgent(id('coder'), 'active');
       emit(id('coder'), 'testing', 'receive', `Received ${failures.length} failure(s) from D`);
 

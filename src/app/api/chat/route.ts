@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
+import { readFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { join, resolve, basename } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
@@ -10,6 +10,7 @@ import {
   type RunnerOptions,
 } from '../../../../pipeline/runner.ts';
 import { EMPTY_RUNTIME } from '@/lib/pipeline-runtime';
+import { writeJsonAtomic } from '@/lib/atomic-write';
 import { readPendingApproval } from '@/lib/pipeline-approval';
 import { buildSupervisorSnapshot, getSupervisorRecommendation } from '@/lib/pipeline-supervisor';
 import { buildSupervisorConceptReply, looksLikeStatusQuestion } from '@/lib/supervisor-concept';
@@ -110,7 +111,7 @@ function getManualState(): Record<string, unknown> {
     runtime: { ...EMPTY_RUNTIME },
     events: [],
   };
-  writeFileSync(eventsFile, JSON.stringify(fresh, null, 2));
+  writeJsonAtomic(eventsFile, fresh);
   return fresh;
 }
 
@@ -133,7 +134,7 @@ function getStagingState(): Record<string, unknown> {
     runtime: { ...EMPTY_RUNTIME },
     events: [],
   };
-  writeFileSync(eventsFile, JSON.stringify(fresh, null, 2));
+  writeJsonAtomic(eventsFile, fresh);
   return fresh;
 }
 
@@ -152,7 +153,7 @@ function findLatestProject(): string | null {
 }
 
 function writeState(file: string, state: Record<string, unknown>) {
-  writeFileSync(file, JSON.stringify(state, null, 2));
+  writeJsonAtomic(file, state);
 }
 
 function appendUserEvent(state: Record<string, unknown>, agent: string, message: string) {
@@ -214,7 +215,7 @@ function appendEvent(eventsFile: string, agent: string, type: string, text: stri
       text,
       ...(detail ? { detail } : {}),
     });
-    writeFileSync(eventsFile, JSON.stringify(s, null, 2));
+    writeJsonAtomic(eventsFile, s);
   } catch {}
 }
 
@@ -241,7 +242,7 @@ function streamClaude(
           type: 'status',
           text: `Running ${roleLabel(readRoster(), agent)} in isolated Docker worker.`,
         });
-        writeFileSync(eventsFile, JSON.stringify(s, null, 2));
+        writeJsonAtomic(eventsFile, s);
       } catch {}
     }
 
@@ -272,7 +273,7 @@ function streamClaude(
             const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
             if (!s.sessions) s.sessions = {};
             s.sessions[agent] = streamedSessionId;
-            writeFileSync(eventsFile, JSON.stringify(s, null, 2));
+            writeJsonAtomic(eventsFile, s);
           } catch {}
         }
       }
@@ -338,7 +339,7 @@ function streamClaude(
             memberId: agent,
             model: opts.model,
           });
-          writeFileSync(eventsFile, JSON.stringify(s, null, 2));
+          writeJsonAtomic(eventsFile, s);
         } catch {}
       }
     });
@@ -368,7 +369,7 @@ function streamClaude(
             type: 'text',
             text: `I could not keep the ${roleLabel(readRoster(), agent)} isolated for this turn because Claude subscription auth is unavailable in Docker right now, so I am retrying it on the host instead of failing the run.`,
           });
-          writeFileSync(eventsFile, JSON.stringify(s, null, 2));
+          writeJsonAtomic(eventsFile, s);
         } catch {}
 
         resolveResponse(await streamClaude(
@@ -384,7 +385,7 @@ function streamClaude(
       try {
         const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
         if (s.agentStatus) s.agentStatus[agent] = 'idle';
-        writeFileSync(eventsFile, JSON.stringify(s, null, 2));
+        writeJsonAtomic(eventsFile, s);
       } catch {}
       resolveResponse(NextResponse.json({ success: true, sessionId: newSessionId }));
     });
@@ -418,7 +419,7 @@ function handleManual(agent: string, message: string, model: string) {
     events.push({ time: new Date().toISOString(), agent, phase: 'concept', type: 'user_msg', text: `You: ${message}` });
   }
   state.events = events;
-  writeFileSync(eventsFile, JSON.stringify(state, null, 2));
+  writeJsonAtomic(eventsFile, state);
 
   const safeMessage = message.startsWith('-') ? 'User says: ' + message : message;
 
