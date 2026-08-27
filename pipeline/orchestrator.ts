@@ -68,7 +68,7 @@ import { readRoster } from '../src/lib/team/roster.ts';
 import { buildRunPlan, describeRunPlan } from '../src/lib/team/slots.ts';
 import { writeTeamManifest } from '../src/lib/team/manifest.ts';
 import { memberSpawnOptions } from '../src/lib/team/spawn.ts';
-import { ensureMemoryDirs, ingestInbox, withMemory } from '../src/lib/team/memory.ts';
+import { buildMemorySelection, ensureMemoryDirs, ingestInbox } from '../src/lib/team/memory.ts';
 import { summarizeToolResult } from '../src/lib/events.ts';
 import { writeJsonAtomic } from '../src/lib/atomic-write.ts';
 import {
@@ -209,6 +209,43 @@ function absorbMemoryInbox(who: string): void {
     }
   } catch {
     // Memory is an optimisation, never a reason to fail a run.
+  }
+}
+
+/**
+ * Attach the team-memory block to a prompt, scoped to who is about to read it.
+ *
+ * Two things decide what goes in:
+ *
+ * - **The job.** Kinds are weighted by slot, and entries whose files overlap
+ *   what the turn is about win outright. Recency is only a tiebreak. The old
+ *   behaviour — the whole 120-line index, ranked by nothing but age, on every
+ *   turn — spent 3-6k tokens a turn telling a coder about decisions it had no
+ *   use for.
+ *
+ * - **What this session has already seen.** A resumed session replays its
+ *   transcript, so anything sent on turn one is still there on turn six. Only
+ *   the delta goes into a resumed prompt; a cold session gets the full slice
+ *   and its record is reset, because a new transcript has seen nothing.
+ */
+function attachMemory(slot: SlotId, agent: string, prompt: string, isResume: boolean): string {
+  try {
+    const alreadySent = state.runtime.memoryInjected[agent] ?? [];
+
+    const selection = buildMemorySelection(projectDir, {
+      slot,
+      phase: state.currentPhase,
+      exclude: isResume ? alreadySent : [],
+    });
+
+    state.runtime.memoryInjected[agent] = isResume
+      ? [...alreadySent, ...selection.ids]
+      : selection.ids;
+
+    return selection.block ? `${prompt}\n\n${selection.block}` : prompt;
+  } catch {
+    // Memory is an optimisation, never a reason to fail a turn.
+    return prompt;
   }
 }
 
@@ -661,7 +698,12 @@ async function runClaudeTurn(
 
     // What the team already knows, as one line per fact. Detail stays on disk
     // and is read on demand, so this stays cheap as memory grows.
-    const safePrompt = withMemory(projectDir, basePrompt);
+    //
+    // Scoped two ways. By slot and phase, because a coder does not need the
+    // architecture debate and a reviewer does. And by what this session has
+    // already been told: a resumed session replays its whole transcript, so
+    // re-sending the same block every turn buried one copy per turn inside it.
+    const safePrompt = attachMemory(slot, agent, basePrompt, !!opts.resume);
 
     // Model, effort, permission mode, tool capabilities and attached skills all
     // come from the member record — two members in the same run can differ.

@@ -8,7 +8,10 @@ import { join } from 'node:path';
 const {
   MAX_CLAIM_LENGTH,
   MAX_INDEX_LINES,
+  MAX_MEMORY_BLOCK_CHARS,
+  MEMORY_BLOCK_LIMIT,
   buildMemoryBlock,
+  buildMemorySelection,
   ensureMemoryDirs,
   ingestInbox,
   memoryArchivePath,
@@ -87,7 +90,12 @@ const block = buildMemoryBlock(project);
 assert.match(block, /\[TEAM MEMORY\] 1 fact/);
 assert.match(block, /read .*entries\/<id>\.md/, 'points at the detail rather than inlining it');
 assert.ok(!block.includes('no persistent store'), 'the body is NOT injected — that is the whole point');
-assert.ok(withMemory(project, 'do the thing').endsWith('do the thing'), 'the prompt is appended after the block');
+// The block goes AFTER the prompt. It changes every turn, so leading with it
+// made every token behind it a cache miss; the stable part of a prompt belongs
+// at the front.
+const withBlock = withMemory(project, 'do the thing');
+assert.ok(withBlock.startsWith('do the thing'), 'the prompt leads');
+assert.ok(withBlock.trimEnd().endsWith('[END TEAM MEMORY]'), 'the volatile block trails');
 
 // ── Dedupe ───────────────────────────────────────────────────────────
 
@@ -176,6 +184,84 @@ assert.ok(
 );
 assert.equal(buildMemoryBlock(project, { limit: 5 }).split('\n').length, 8, 'callers can ask for fewer');
 
+// The default injected slice is much smaller than what is kept on disk. The
+// whole index used to go into every single turn regardless of who was running.
+assert.ok(
+  buildMemoryBlock(project).split('\n').length <= MEMORY_BLOCK_LIMIT + 3,
+  'the default injection is the block limit, not the whole index',
+);
+assert.ok(
+  bigBlock.length <= MAX_MEMORY_BLOCK_CHARS + 400,
+  'the char backstop holds even when the line limit would allow more',
+);
+assert.ok(readIndex(project).length > MEMORY_BLOCK_LIMIT, 'the on-disk index really is larger than the slice');
+
+// ── Selection is scoped to the job ───────────────────────────────────
+
+const scoped = mkdtempSync(join(tmpdir(), 'hackeroom-memory-scope-'));
+ensureMemoryDirs(scoped);
+
+writeFileSync(
+  join(memoryInboxDir(scoped), 'pat-1.md'),
+  `---\nkind: decision\nclaim: We chose Postgres over SQLite for concurrent writes\ntags: storage\n---\nlong rationale\n`,
+);
+writeFileSync(
+  join(memoryInboxDir(scoped), 'pat-2.md'),
+  `---\nkind: interface\nclaim: createUser returns the row id, not the row\ntags: db\nfiles: src/db/users.ts\n---\nsignature detail\n`,
+);
+writeFileSync(
+  join(memoryInboxDir(scoped), 'pat-3.md'),
+  `---\nkind: gotcha\nclaim: The test runner needs DATABASE_URL set or it silently skips\ntags: testing\n---\nwhy\n`,
+);
+ingestInbox(scoped);
+
+const coderPick = buildMemorySelection(scoped, { slot: 'coder', limit: 1 });
+assert.deepEqual(
+  coderPick.ids.length,
+  1,
+  'the limit is respected',
+);
+assert.ok(
+  !buildMemorySelection(scoped, { slot: 'coder', limit: 1 }).block.includes('Postgres over SQLite'),
+  'a settled architecture decision is not what a coder is short of',
+);
+
+const focused = buildMemorySelection(scoped, { slot: 'coder', focusFiles: ['src/db/users.ts'], limit: 1 });
+assert.match(
+  focused.block,
+  /createUser returns the row id/,
+  'a fact about the file being worked on outranks everything else',
+);
+
+const reviewerPick = buildMemorySelection(scoped, { slot: 'reviewer', limit: 1 });
+assert.match(
+  reviewerPick.block,
+  /Postgres over SQLite/,
+  'the same index reads differently for a reviewer, whose job is the decisions',
+);
+
+// ── Deltas: a resumed session is not re-told what it already has ─────
+
+const first = buildMemorySelection(scoped, { slot: 'coder' });
+assert.equal(first.ids.length, 3, 'a cold turn gets the full slice');
+assert.match(first.block, /\[TEAM MEMORY\] 3 fact/);
+
+const second = buildMemorySelection(scoped, { slot: 'coder', exclude: first.ids });
+assert.equal(second.block, '', 'nothing new means nothing sent — not a second copy of the same block');
+assert.deepEqual(second.ids, []);
+
+writeFileSync(
+  join(memoryInboxDir(scoped), 'reacty-4.md'),
+  `---\nkind: gotcha\nclaim: The auth middleware runs after the body parser, not before\ntags: auth\n---\nwhy\n`,
+);
+ingestInbox(scoped);
+
+const third = buildMemorySelection(scoped, { slot: 'coder', exclude: first.ids });
+assert.equal(third.ids.length, 1, 'only the new fact goes into a resumed prompt');
+assert.match(third.block, /\[TEAM MEMORY — NEW\] 1 fact/, 'and it is labelled as new rather than restated');
+assert.ok(!third.block.includes('createUser returns'), 'what the session already has is not repeated');
+
+rmSync(scoped, { recursive: true, force: true });
 rmSync(project, { recursive: true, force: true });
 
 console.log('memory checks passed');

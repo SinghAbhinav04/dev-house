@@ -30,8 +30,28 @@ import { join } from 'node:path';
 
 export const MEMORY_DIR = '.squad/memory';
 
-/** Index lines kept in the prompt-injected file before older ones are archived. */
+/** Index lines kept on disk before older ones are archived. */
 export const MAX_INDEX_LINES = 120;
+
+/**
+ * Index lines actually injected into a prompt.
+ *
+ * Much smaller than what is kept on disk, and deliberately so. The whole
+ * 120-line index used to go into every turn regardless of who was running or
+ * what they were doing — roughly 3-6k tokens, on a "fix each issue" prompt as
+ * readily as on a research turn. The file stays the team's full record; this is
+ * how much of it is worth paying for on any one turn.
+ */
+export const MEMORY_BLOCK_LIMIT = 20;
+
+/**
+ * Hard ceiling on the injected block, whatever the scoring decides.
+ *
+ * A backstop, not a target: if a future change to the ranking lets more through
+ * than intended, the cost is still bounded. Lines are dropped lowest-scoring
+ * first so the cut is never arbitrary.
+ */
+export const MAX_MEMORY_BLOCK_CHARS = 3000;
 
 /** Hard cap on a single index line, so one verbose entry cannot dominate. */
 export const MAX_CLAIM_LENGTH = 120;
@@ -322,33 +342,161 @@ export function ingestInbox(projectDir: string): IngestResult {
 // ── Prompt injection ─────────────────────────────────────────────────
 
 /**
- * The memory block appended to member prompts.
+ * How much a kind of fact is worth to the member doing a particular job.
  *
- * Only the index goes in. Detail is reached with Read, so recalling a fact
- * costs one line until somebody actually needs the whole story. Returns an
- * empty string when there is nothing to say, so an empty team memory costs
- * literally nothing.
+ * A coder needs interfaces and gotchas; whether the team debated Postgres
+ * versus SQLite is settled and costs it tokens to be told. A reviewer needs the
+ * opposite: the decisions are the thing under review. Ranking by recency alone
+ * — which is what `slice(-limit)` did — gets this right only by accident.
  */
-export function buildMemoryBlock(projectDir: string, options: { limit?: number } = {}): string {
-  const lines = readIndex(projectDir);
-  if (lines.length === 0) return '';
+const KIND_WEIGHT_BY_SLOT: Record<string, Partial<Record<MemoryKind, number>>> = {
+  planner: { decision: 3, fact: 3, interface: 2, flow: 2, gotcha: 2 },
+  reviewer: { decision: 3, interface: 2, gotcha: 2, fact: 1, flow: 1 },
+  coder: { interface: 3, gotcha: 3, flow: 2, decision: 2, fact: 1 },
+  tester: { gotcha: 3, interface: 2, flow: 2, decision: 1, fact: 1 },
+  auditor: { gotcha: 3, interface: 2, decision: 2, flow: 1, fact: 1 },
+  supervisor: { decision: 3, fact: 2, flow: 2, gotcha: 1, interface: 1 },
+};
 
-  const limit = options.limit ?? MAX_INDEX_LINES;
-  const shown = lines.slice(-limit);
+const DEFAULT_KIND_WEIGHT = 1;
+
+export interface MemoryBlockOptions {
+  /** The slot the prompt is going to, used to weight kinds. */
+  slot?: string;
+  /** The phase in progress, matched against entry tags. */
+  phase?: string;
+  /** Files this turn is about. Overlap here is the strongest signal there is. */
+  focusFiles?: string[];
+  /** How many lines to inject. Defaults to MEMORY_BLOCK_LIMIT. */
+  limit?: number;
+  /** Entry ids already present in this session's transcript. */
+  exclude?: string[];
+}
+
+export interface MemorySelection {
+  /** The rendered block, or '' when there is nothing worth injecting. */
+  block: string;
+  /** The ids that went in, so a caller can avoid re-sending them next turn. */
+  ids: string[];
+}
+
+function baseName(path: string): string {
+  const parts = path.split('/');
+  return parts[parts.length - 1] || path;
+}
+
+/**
+ * How useful this line is to the turn about to run.
+ *
+ * File overlap dominates on purpose: "someone already worked out something
+ * about the file you are editing" is worth more than any amount of topical
+ * similarity. Recency is a tiebreak with a deliberately tiny weight — it is
+ * what to fall back on when nothing else distinguishes two facts, not a
+ * ranking in its own right.
+ */
+function scoreLine(
+  line: IndexLine,
+  position: number,
+  total: number,
+  options: MemoryBlockOptions
+): number {
+  let score = 0;
+
+  const weights = options.slot ? KIND_WEIGHT_BY_SLOT[options.slot] : undefined;
+  score += weights?.[line.kind] ?? DEFAULT_KIND_WEIGHT;
+
+  const focus = options.focusFiles ?? [];
+  if (focus.length > 0 && line.files.length > 0) {
+    const focusNames = new Set(focus.map(baseName));
+    const overlap = line.files.filter((file) => focusNames.has(baseName(file))).length;
+    score += Math.min(overlap, 3) * 5;
+  }
+
+  if (options.phase && line.tags.length > 0) {
+    const phaseTerms = options.phase.toLowerCase().split('-').filter(Boolean);
+    const tags = line.tags.map((tag) => tag.toLowerCase());
+    for (const term of phaseTerms) {
+      if (tags.some((tag) => tag.includes(term) || term.includes(tag))) score += 1;
+    }
+  }
+
+  score += total > 1 ? (position / (total - 1)) * 0.5 : 0;
+
+  return score;
+}
+
+/**
+ * Choose which index lines are worth this turn's tokens, and render them.
+ *
+ * Returns the ids alongside the text so the orchestrator can track what a
+ * session has already been told and send only what is new next time.
+ */
+export function buildMemorySelection(
+  projectDir: string,
+  options: MemoryBlockOptions = {}
+): MemorySelection {
+  const all = readIndex(projectDir);
+  if (all.length === 0) return { block: '', ids: [] };
+
+  const excluded = new Set(options.exclude ?? []);
+  const candidates = all.filter((line) => !excluded.has(line.id));
+  if (candidates.length === 0) return { block: '', ids: [] };
+
+  const limit = options.limit ?? MEMORY_BLOCK_LIMIT;
+
+  const ranked = candidates
+    .map((line, position) => ({ line, score: scoreLine(line, position, candidates.length, options) }))
+    .sort((a, b) => b.score - a.score);
+
+  const chosen: typeof ranked = [];
+  let chars = 0;
+  for (const candidate of ranked) {
+    if (chosen.length >= limit) break;
+    const cost = formatIndexLine(candidate.line).length + 1;
+    if (chars + cost > MAX_MEMORY_BLOCK_CHARS) break;
+    chosen.push(candidate);
+    chars += cost;
+  }
+
+  if (chosen.length === 0) return { block: '', ids: [] };
+
+  // Ranked to decide what goes in, chronological to present it: a list that
+  // jumps around in time reads as noise even when every line earns its place.
+  const order = new Map(candidates.map((line, index) => [line.id, index]));
+  const shown = chosen
+    .map((candidate) => candidate.line)
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+
   const entriesPath = join(memoryDir(projectDir), 'entries');
+  const isDelta = excluded.size > 0;
 
-  return [
-    `[TEAM MEMORY] ${shown.length} fact(s) the team has already established.`,
+  const block = [
+    isDelta
+      ? `[TEAM MEMORY — NEW] ${shown.length} fact(s) recorded since your last turn.`
+      : `[TEAM MEMORY] ${shown.length} fact(s) the team has already established.`,
     `Trust these over guessing. Full detail for any line: read ${entriesPath}/<id>.md`,
     ...shown.map(formatIndexLine),
     '[END TEAM MEMORY]',
   ].join('\n');
+
+  return { block, ids: shown.map((line) => line.id) };
 }
 
-/** Prepend the memory block to a prompt, or return it unchanged if empty. */
-export function withMemory(projectDir: string, prompt: string, options: { limit?: number } = {}): string {
+/** The memory block on its own, for callers that do not track what was sent. */
+export function buildMemoryBlock(projectDir: string, options: MemoryBlockOptions = {}): string {
+  return buildMemorySelection(projectDir, options).block;
+}
+
+/**
+ * Attach the memory block to a prompt.
+ *
+ * Appended, not prepended. The block changes from turn to turn, so putting it
+ * first made every token after it a cache miss; the stable part of a prompt
+ * belongs at the front and the volatile part at the back.
+ */
+export function withMemory(projectDir: string, prompt: string, options: MemoryBlockOptions = {}): string {
   const block = buildMemoryBlock(projectDir, options);
-  return block ? `${block}\n\n${prompt}` : prompt;
+  return block ? `${prompt}\n\n${block}` : prompt;
 }
 
 // ── Writing (used by the orchestrator itself) ────────────────────────

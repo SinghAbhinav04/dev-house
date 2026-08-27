@@ -27,11 +27,24 @@ export interface PipelineRuntimeState {
    * whoever happens to be running this instant.
    */
   activeTurns: Record<string, ActiveTurnState>;
+  /**
+   * Memory entry ids each member has already been sent, keyed by member id.
+   *
+   * A resumed session replays its whole transcript, so injecting the full
+   * memory block on every turn buried one copy per turn inside it — a coder
+   * resumed six times carried six copies, all replayed on the seventh. This is
+   * what lets a resumed turn send only what is new.
+   *
+   * Cleared for a member whenever they start a cold session, since a fresh
+   * transcript has seen nothing.
+   */
+  memoryInjected: Record<string, string[]>;
 }
 
 export const EMPTY_RUNTIME: PipelineRuntimeState = {
   activeTurn: null,
   activeTurns: {},
+  memoryInjected: {},
 };
 
 export const TURN_IDLE_TIMEOUT_MS = 300_000;
@@ -91,7 +104,7 @@ export function describeCurrentTask(slot: string, phase: string): string {
  * only a singular activeTurn.
  */
 export function normalizeRuntime(raw: unknown): PipelineRuntimeState {
-  if (!raw || typeof raw !== 'object') return { activeTurn: null, activeTurns: {} };
+  if (!raw || typeof raw !== 'object') return { ...EMPTY_RUNTIME, activeTurns: {}, memoryInjected: {} };
   const input = raw as Record<string, unknown>;
 
   const activeTurn = (input.activeTurn as ActiveTurnState | null) ?? null;
@@ -104,7 +117,15 @@ export function normalizeRuntime(raw: unknown): PipelineRuntimeState {
         ? { [activeTurn.agent]: activeTurn }
         : {};
 
-  return { activeTurn, activeTurns };
+  // Absent in state files written before delta injection existed. An empty map
+  // is the safe default: the next turn re-sends the block once, which costs a
+  // few hundred tokens rather than risking a member never being told anything.
+  const memoryInjected =
+    input.memoryInjected && typeof input.memoryInjected === 'object'
+      ? (input.memoryInjected as Record<string, string[]>)
+      : {};
+
+  return { activeTurn, activeTurns, memoryInjected };
 }
 
 /**
