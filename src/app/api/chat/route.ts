@@ -25,7 +25,8 @@ import {
   type SecurityMode,
 } from '@/lib/pipeline-control';
 import { parseSupervisorIntent } from '@/lib/supervisor-intents';
-import { createClaudeDecoder } from '@/lib/cli/decoder';
+import type { AgentEvent } from '@/lib/cli/decoder';
+import { resolveCli } from '@/lib/cli/registry';
 
 import { getMember, readRoster } from '@/lib/team/roster';
 import { resolveSlot } from '@/lib/team/slots';
@@ -226,7 +227,8 @@ function streamClaude(
   sessionId: string,
 ): Promise<NextResponse> {
   return new Promise<NextResponse>((resolveResponse) => {
-    const decoder = createClaudeDecoder();
+    // From the adapter, so the member's own CLI decides how its stream is read.
+    const decoder = resolveCli(opts.cli).createDecoder();
     const child = runner.spawn(opts);
     const canFallbackToHost = child.backend === 'docker' && runner.supportsHostFallback(opts);
 
@@ -256,55 +258,62 @@ function streamClaude(
       diagnosticTail = `${diagnosticTail}\n${text}`.slice(-12_000);
     }
 
+    /**
+     * Act on one decoded event. Shared by the line handler and the drain at
+     * close, so a decoder that buffers events is flushed through the same
+     * path rather than a second copy of it.
+     */
+    function handleEvent(decoded: AgentEvent) {
+      if (decoded.kind === 'session') {
+        newSessionId = decoded.sessionId;
+        try {
+          const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
+          if (!s.sessions) s.sessions = {};
+          s.sessions[agent] = decoded.sessionId;
+          writeJsonAtomic(eventsFile, s);
+        } catch {}
+        return;
+      }
+
+      if (decoded.kind === 'tool_call') {
+        appendEvent(eventsFile, agent, 'tool_call', decoded.description, decoded.detail);
+        return;
+      }
+
+      if (decoded.kind === 'text') {
+        appendEvent(eventsFile, agent, 'text', decoded.text);
+        return;
+      }
+
+      // Tool results, so a terminal view has something between a call and
+      // the next message rather than a silent gap.
+      if (decoded.kind === 'tool_result') {
+        if (decoded.summary) appendEvent(eventsFile, agent, 'tool_result', decoded.summary);
+        return;
+      }
+
+      if (decoded.kind === 'result') {
+        newSessionId = decoded.sessionId || sessionId;
+        lastResultText = decoded.text;
+        try {
+          const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
+          if (!s.sessions) s.sessions = {};
+          s.sessions[agent] = newSessionId;
+          // Attribute the spend to the member that ran, not just the total.
+          s.usage = normalizeUsage(s.usage);
+          recordUsage(s.usage as UsageBreakdown, usageFromResultEvent(decoded.raw), {
+            memberId: agent,
+            model: opts.model,
+          });
+          writeJsonAtomic(eventsFile, s);
+        } catch {}
+      }
+    }
+
     rl.on('line', (line) => {
       if (!line.trim()) return;
       noteDiagnostic(line);
-      for (const decoded of decoder.push(line)) {
-        if (decoded.kind === 'session') {
-          newSessionId = decoded.sessionId;
-          try {
-            const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
-            if (!s.sessions) s.sessions = {};
-            s.sessions[agent] = decoded.sessionId;
-            writeJsonAtomic(eventsFile, s);
-          } catch {}
-          continue;
-        }
-
-        if (decoded.kind === 'tool_call') {
-          appendEvent(eventsFile, agent, 'tool_call', decoded.description, decoded.detail);
-          continue;
-        }
-
-        if (decoded.kind === 'text') {
-          appendEvent(eventsFile, agent, 'text', decoded.text);
-          continue;
-        }
-
-        // Tool results, so a terminal view has something between a call and
-        // the next message rather than a silent gap.
-        if (decoded.kind === 'tool_result') {
-          if (decoded.summary) appendEvent(eventsFile, agent, 'tool_result', decoded.summary);
-          continue;
-        }
-
-        if (decoded.kind === 'result') {
-          newSessionId = decoded.sessionId || sessionId;
-          lastResultText = decoded.text;
-          try {
-            const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
-            if (!s.sessions) s.sessions = {};
-            s.sessions[agent] = newSessionId;
-            // Attribute the spend to the member that ran, not just the total.
-            s.usage = normalizeUsage(s.usage);
-            recordUsage(s.usage as UsageBreakdown, usageFromResultEvent(decoded.raw), {
-              memberId: agent,
-              model: opts.model,
-            });
-            writeJsonAtomic(eventsFile, s);
-          } catch {}
-        }
-      }
+      for (const decoded of decoder.push(line)) handleEvent(decoded);
     });
 
     child.stderr.on('data', (chunk) => {
@@ -314,6 +323,9 @@ function streamClaude(
     });
 
     child.on('close', async () => {
+      // Anything the decoder was still holding back.
+      for (const decoded of decoder.finish()) handleEvent(decoded);
+
       if (canFallbackToHost && isRecoverableDockerAuthFailure(`${diagnosticTail}\n${stderr}\n${lastResultText}`)) {
         try {
           const s = JSON.parse(readFileSync(eventsFile, 'utf8'));

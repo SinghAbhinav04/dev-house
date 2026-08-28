@@ -67,9 +67,16 @@ import { readRoster } from '../src/lib/team/roster.ts';
 import { buildRunPlan, describeRunPlan } from '../src/lib/team/slots.ts';
 import { writeTeamManifest } from '../src/lib/team/manifest.ts';
 import { memberSpawnOptions } from '../src/lib/team/spawn.ts';
-import { buildMemorySelection, ensureMemoryDirs, ingestInbox } from '../src/lib/team/memory.ts';
+import {
+  buildMemorySelection,
+  ensureMemoryDirs,
+  ingestInbox,
+  shouldSendMemoryDelta,
+} from '../src/lib/team/memory.ts';
 import { writeJsonAtomic } from '../src/lib/atomic-write.ts';
-import { createClaudeDecoder } from '../src/lib/cli/decoder.ts';
+import type { AgentEvent, ResultEvent } from '../src/lib/cli/decoder.ts';
+import { resolveCli } from '../src/lib/cli/registry.ts';
+import type { AgentCli } from '../src/lib/cli/types.ts';
 import {
   billableTokens,
   emptyBreakdown,
@@ -226,18 +233,32 @@ function absorbMemoryInbox(who: string): void {
  *   transcript, so anything sent on turn one is still there on turn six. Only
  *   the delta goes into a resumed prompt; a cold session gets the full slice
  *   and its record is reset, because a new transcript has seen nothing.
+ *
+ * That second rule holds only where resuming actually replays the transcript,
+ * which is a property of the CLI and not of the run. On an engine that starts a
+ * resumed turn without the prior conversation, sending only the delta would
+ * silently drop everything the member was told on turn one — no error, nothing
+ * in the log, just a member that has forgotten what the team knows. So the CLI
+ * is asked rather than assumed.
  */
-function attachMemory(slot: SlotId, agent: string, prompt: string, isResume: boolean): string {
+function attachMemory(
+  slot: SlotId,
+  agent: string,
+  prompt: string,
+  isResume: boolean,
+  cli: AgentCli
+): string {
   try {
+    const carriesHistory = shouldSendMemoryDelta(isResume, cli.support.resumeReplaysTranscript);
     const alreadySent = state.runtime.memoryInjected[agent] ?? [];
 
     const selection = buildMemorySelection(projectDir, {
       slot,
       phase: state.currentPhase,
-      exclude: isResume ? alreadySent : [],
+      exclude: carriesHistory ? alreadySent : [],
     });
 
-    state.runtime.memoryInjected[agent] = isResume
+    state.runtime.memoryInjected[agent] = carriesHistory
       ? [...alreadySent, ...selection.ids]
       : selection.ids;
 
@@ -693,6 +714,7 @@ async function runClaudeTurn(
   return new Promise((resolve, reject) => {
     const member = requireMember(slot);
     const agent = member.id;
+    const cli = resolveCli(member.cli);
     const basePrompt = prompt.startsWith('-') ? 'User says: ' + prompt : prompt;
 
     // What the team already knows, as one line per fact. Detail stays on disk
@@ -700,9 +722,10 @@ async function runClaudeTurn(
     //
     // Scoped two ways. By slot and phase, because a coder does not need the
     // architecture debate and a reviewer does. And by what this session has
-    // already been told: a resumed session replays its whole transcript, so
-    // re-sending the same block every turn buried one copy per turn inside it.
-    const safePrompt = attachMemory(slot, agent, basePrompt, !!opts.resume);
+    // already been told — which depends on whether this member's CLI replays
+    // its transcript on resume, so the adapter is passed in rather than
+    // assumed.
+    const safePrompt = attachMemory(slot, agent, basePrompt, !!opts.resume, cli);
 
     // Model, effort, permission mode, tool capabilities and attached skills all
     // come from the member record — two members in the same run can differ.
@@ -741,10 +764,11 @@ async function runClaudeTurn(
       emit('system', state.currentPhase, 'status', `Running ${member.name} on the host — isolation waived for this turn.`);
     }
 
-    let lastResult: Record<string, unknown> | null = null;
+    let turnResult: ResultEvent | null = null;
     let currentSessionId = opts.resume || '';
     let structured: Record<string, unknown> | null = null;
-    const decoder = createClaudeDecoder();
+    // From the adapter, so the member's own CLI decides how its stream is read.
+    const decoder = cli.createDecoder();
     // Kept here rather than in the decoder: this is the input the *approval
     // card* replays back to the user, which is a concern of the run rather
     // than of the wire format.
@@ -803,99 +827,114 @@ async function runClaudeTurn(
       child.kill('SIGTERM');
     }, 5_000);
 
+    /**
+     * Act on one decoded event. Returns true when the turn is over and the
+     * rest of the batch must not be processed.
+     *
+     * Parsing lives in the decoder; what to *do* about each event stays here,
+     * because only the orchestrator can resolve the turn or kill the child.
+     * Shared by the line handler and the drain at close, so a decoder that
+     * buffers — as one for a CLI streaming text deltas must — is flushed
+     * through exactly the same path rather than a second copy of it.
+     */
+    function handleEvent(decoded: AgentEvent): boolean {
+      if (decoded.kind === 'session') {
+        currentSessionId = decoded.sessionId || currentSessionId;
+        if (currentSessionId) saveSession(agent, currentSessionId);
+        return false;
+      }
+
+      if (decoded.kind === 'text') {
+        emit(agent, state.currentPhase, 'text', decoded.text);
+        return false;
+      }
+
+      if (decoded.kind === 'tool_call') {
+        if (decoded.callId) toolInputs.set(decoded.callId, decoded.input);
+        emit(agent, state.currentPhase, 'tool_call', decoded.description, decoded.detail);
+        if (decoded.tool === 'Bash') bashInFlight = true;
+        return false;
+      }
+
+      if (decoded.kind === 'structured') {
+        structured = decoded.value;
+        return false;
+      }
+
+      if (decoded.kind === 'tool_result') {
+        if (decoded.tool === 'Bash') bashInFlight = false;
+
+        if (decoded.summary) {
+          emit(agent, state.currentPhase, 'tool_result', decoded.summary);
+        }
+
+        if (!decoded.isError) return false;
+
+        if (decoded.errorText) {
+          emit(agent, state.currentPhase, 'permission_denied', decoded.errorText);
+        }
+
+        const strictBashAsk =
+          state.securityMode === 'strict' &&
+          (agent === id('coder') || agent === id('tester')) &&
+          decoded.tool === 'Bash';
+
+        if (strictBashAsk && !settled) {
+          permissionDenied = {
+            toolName: 'Bash',
+            toolInput: toolInputs.get(decoded.callId) || {},
+          };
+          interruptedForApproval = true;
+          settled = true;
+          clearActiveTurn(agent);
+          resolve({
+            result: '',
+            sessionId: currentSessionId,
+            structured,
+            permissionDenied,
+            interruptedForApproval,
+            stalled,
+            fallbackToHost: false,
+          });
+          clearInterval(stallWatcher);
+          rl.close();
+          child.kill('SIGTERM');
+          return true;
+        }
+
+        return false;
+      }
+
+      if (decoded.kind === 'result') {
+        turnResult = decoded;
+        if (decoded.text) noteDiagnostic(decoded.text);
+
+        recordUsage(state.usage, usageFromResultEvent(decoded.raw), {
+          memberId: agent,
+          model: runnerOpts.model,
+        });
+        noteBudget(member);
+        flush();
+
+        const bashDenial = decoded.denials.find((denial) => denial.toolName === 'Bash');
+        if (bashDenial) {
+          permissionDenied = { toolName: 'Bash', toolInput: bashDenial.toolInput };
+        }
+      }
+
+      return false;
+    }
+
     rl.on('line', (line) => {
       if (!line.trim()) return;
       noteDiagnostic(line);
+      // Liveness is counted per LINE, before decoding, so a decoder that holds
+      // events back to batch them cannot be mistaken for a stalled session.
       lastStreamActivityAt = Date.now();
       noteActiveTurnActivity(agent);
 
-      // Parsing lives in the decoder; what to *do* about each event stays
-      // here, because only the orchestrator can resolve the turn or kill the
-      // child.
       for (const decoded of decoder.push(line)) {
-        if (decoded.kind === 'session') {
-          currentSessionId = decoded.sessionId || currentSessionId;
-          if (currentSessionId) saveSession(agent, currentSessionId);
-          continue;
-        }
-
-        if (decoded.kind === 'text') {
-          emit(agent, state.currentPhase, 'text', decoded.text);
-          continue;
-        }
-
-        if (decoded.kind === 'tool_call') {
-          if (decoded.callId) toolInputs.set(decoded.callId, decoded.input);
-          emit(agent, state.currentPhase, 'tool_call', decoded.description, decoded.detail);
-          if (decoded.tool === 'Bash') bashInFlight = true;
-          continue;
-        }
-
-        if (decoded.kind === 'structured') {
-          structured = decoded.value;
-          continue;
-        }
-
-        if (decoded.kind === 'tool_result') {
-          if (decoded.tool === 'Bash') bashInFlight = false;
-
-          if (decoded.summary) {
-            emit(agent, state.currentPhase, 'tool_result', decoded.summary);
-          }
-
-          if (!decoded.isError) continue;
-
-          if (decoded.errorText) {
-            emit(agent, state.currentPhase, 'permission_denied', decoded.errorText);
-          }
-
-          const strictBashAsk =
-            state.securityMode === 'strict' &&
-            (agent === id('coder') || agent === id('tester')) &&
-            decoded.tool === 'Bash';
-
-          if (strictBashAsk && !settled) {
-            permissionDenied = {
-              toolName: 'Bash',
-              toolInput: toolInputs.get(decoded.callId) || {},
-            };
-            interruptedForApproval = true;
-            settled = true;
-            clearActiveTurn(agent);
-            resolve({
-              result: '',
-              sessionId: currentSessionId,
-              structured,
-              permissionDenied,
-              interruptedForApproval,
-              stalled,
-              fallbackToHost: false,
-            });
-            clearInterval(stallWatcher);
-            rl.close();
-            child.kill('SIGTERM');
-            return;
-          }
-
-          continue;
-        }
-
-        if (decoded.kind === 'result') {
-          lastResult = decoded.raw;
-          if (decoded.text) noteDiagnostic(decoded.text);
-
-          recordUsage(state.usage, usageFromResultEvent(decoded.raw), {
-            memberId: agent,
-            model: runnerOpts.model,
-          });
-          noteBudget(member);
-          flush();
-
-          const bashDenial = decoded.denials.find((denial) => denial.toolName === 'Bash');
-          if (bashDenial) {
-            permissionDenied = { toolName: 'Bash', toolInput: bashDenial.toolInput };
-          }
-        }
+        if (handleEvent(decoded)) return;
       }
     });
 
@@ -912,7 +951,14 @@ async function runClaudeTurn(
       clearInterval(stallWatcher);
       rl.close();
 
-      const combinedFailureText = `${diagnosticTail}\n${stderr}\n${String(lastResult?.result || '')}`;
+      // Anything the decoder was still holding. Claude's stream ends with an
+      // explicit result event so this is empty for it, but a CLI that buffers
+      // text deltas would otherwise lose the tail of every turn.
+      for (const decoded of decoder.finish()) {
+        if (handleEvent(decoded)) return;
+      }
+
+      const combinedFailureText = `${diagnosticTail}\n${stderr}\n${turnResult?.text || ''}`;
       if (canFallbackToHost && isRecoverableDockerAuthFailure(combinedFailureText)) {
         settled = true;
         clearActiveTurn(agent);
@@ -929,7 +975,7 @@ async function runClaudeTurn(
         return;
       }
 
-      if (code !== 0 || !lastResult) {
+      if (code !== 0 || !turnResult) {
         // Settle on the reject path too. Without this a later 'error' event
         // gets past the `if (settled) return` guard and emits a second failure
         // for the same turn.
@@ -944,8 +990,13 @@ async function runClaudeTurn(
       settled = true;
       clearActiveTurn(agent);
       resolve({
-        result: (lastResult.result as string) || '',
-        sessionId: (lastResult.session_id as string) || currentSessionId,
+        // From the decoded event, not from its raw payload. Reading
+        // `raw.result` and `raw.session_id` here meant the decoder's job
+        // stopped at the last step and Claude's wire keys leaked back out —
+        // on any other CLI those keys do not exist and both would silently
+        // come back empty.
+        result: turnResult.text,
+        sessionId: turnResult.sessionId || currentSessionId,
         structured,
         permissionDenied,
         interruptedForApproval,

@@ -482,6 +482,21 @@ export function buildMemorySelection(
   return { block, ids: shown.map((line) => line.id) };
 }
 
+/**
+ * Whether this turn may be sent only the memory it has not seen before.
+ *
+ * Two conditions, and both are required. The turn has to be a resume, and the
+ * CLI has to actually replay the prior transcript when it resumes — otherwise
+ * "it already has that" is false and the delta is all the member ever gets.
+ *
+ * Named rather than inlined because getting it wrong fails silently: no error,
+ * no failing test, just a member that has quietly forgotten everything the team
+ * established before its current turn.
+ */
+export function shouldSendMemoryDelta(isResume: boolean, resumeReplaysTranscript: boolean): boolean {
+  return isResume && resumeReplaysTranscript;
+}
+
 /** The memory block on its own, for callers that do not track what was sent. */
 export function buildMemoryBlock(projectDir: string, options: MemoryBlockOptions = {}): string {
   return buildMemorySelection(projectDir, options).block;

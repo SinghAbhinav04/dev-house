@@ -21,6 +21,7 @@ const {
   parseIndexLine,
   readIndex,
   recordToInbox,
+  shouldSendMemoryDelta,
   withMemory,
 } = await import('../src/lib/team/memory.ts');
 
@@ -260,6 +261,23 @@ const third = buildMemorySelection(scoped, { slot: 'coder', exclude: first.ids }
 assert.equal(third.ids.length, 1, 'only the new fact goes into a resumed prompt');
 assert.match(third.block, /\[TEAM MEMORY — NEW\] 1 fact/, 'and it is labelled as new rather than restated');
 assert.ok(!third.block.includes('createUser returns'), 'what the session already has is not repeated');
+
+// ── A delta is only safe where the transcript comes back ─────────────
+//
+// The delta exists because a resumed session replays what it was already told.
+// That is a property of the CLI, not of the run. On an engine that resumes
+// WITHOUT the prior conversation, sending only the delta means the member never
+// receives anything from turn one — and nothing anywhere reports it. Both
+// conditions are required.
+
+assert.equal(shouldSendMemoryDelta(true, true), true, 'a resume on a replaying CLI gets the delta');
+assert.equal(
+  shouldSendMemoryDelta(true, false),
+  false,
+  'a resume on a CLI that does NOT replay must get the full slice, or it forgets turn one',
+);
+assert.equal(shouldSendMemoryDelta(false, true), false, 'a cold session has seen nothing');
+assert.equal(shouldSendMemoryDelta(false, false), false);
 
 rmSync(scoped, { recursive: true, force: true });
 rmSync(project, { recursive: true, force: true });

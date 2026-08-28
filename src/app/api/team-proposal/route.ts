@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { createRunner } from '../../../../pipeline/runner.ts';
-import { createClaudeDecoder } from '@/lib/cli/decoder';
+import { createClaudeDecoder, type AgentEvent } from '@/lib/cli/decoder';
 import { readRoster } from '@/lib/team/roster';
 import { buildRunPlan } from '@/lib/team/slots';
 import { MAX_TEAM_SIZE, OFFICE_FULL_MESSAGE } from '@/lib/team/types';
@@ -77,12 +77,25 @@ function draftProposal(requirements: string, systemPrompt: string, model: string
     // Only the terminal event matters here, but it goes through the same
     // decoder as every other read of the stream so there is one place that
     // knows the wire format.
+    //
+    // Deliberately Claude rather than the adapter for some member: drafting a
+    // team is Hackeroom's own operation, not a member's turn, and it has no
+    // member whose CLI it could inherit. Worth revisiting if a roster can ever
+    // exist on a machine with no Claude Code installed.
     const decoder = createClaudeDecoder();
     const rl = createInterface({ input: child.stdout });
+    const takeResult = (decoded: AgentEvent) => {
+      if (decoded.kind === 'result') lastResult = decoded.raw;
+    };
+
     rl.on('line', (line) => {
-      for (const decoded of decoder.push(line)) {
-        if (decoded.kind === 'result') lastResult = decoded.raw;
-      }
+      for (const decoded of decoder.push(line)) takeResult(decoded);
+    });
+
+    // Anything the decoder was still holding back. A CLI that emits no
+    // terminal event of its own synthesises one here.
+    rl.on('close', () => {
+      for (const decoded of decoder.finish()) takeResult(decoded);
     });
 
     child.stderr.on('data', (chunk: Buffer) => {

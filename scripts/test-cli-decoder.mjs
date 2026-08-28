@@ -205,4 +205,25 @@ assert.equal(
   'a non-string path does not become "READ undefined"',
 );
 
+// ── finish() is part of the contract ─────────────────────────────────
+//
+// Claude's stream always ends with an explicit result event, so its finish()
+// has nothing to say. But callers must still CALL it: a decoder for a CLI that
+// streams text as deltas has to flush its buffer somewhere, and if the three
+// call sites only ever call push(), that decoder loses the tail of every turn
+// with nothing to show for it. This asserts the method exists and is safe to
+// call more than once, so the call sites can rely on it unconditionally.
+
+const finishing = createClaudeDecoder();
+assert.deepEqual(finishing.finish(), [], 'a decoder that saw nothing finishes empty');
+assert.deepEqual(finishing.finish(), [], 'and finishing twice is not an error');
+
+const finishedAfterResult = createClaudeDecoder();
+finishedAfterResult.push(json({ type: 'result', result: 'done', session_id: 's' }));
+assert.deepEqual(
+  finishedAfterResult.finish(),
+  [],
+  'Claude emits its own terminal event, so finish() adds nothing',
+);
+
 console.log('cli decoder checks passed');
