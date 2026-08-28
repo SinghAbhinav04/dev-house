@@ -1113,15 +1113,29 @@ async function runClaudeTurn(
       settled = true;
       clearActiveTurn(agent);
 
-      // Some engines do not put the reply in the stream at all, so it has to
-      // be fetched once the process is gone. Only attempted when the stream
-      // genuinely gave us nothing, so an engine that does stream its reply
-      // never pays for the extra call.
+      // Some engines put neither the reply nor the token counts in the stream,
+      // so both have to be fetched once the process is gone. Only attempted
+      // when the stream genuinely gave us nothing, so an engine that does
+      // stream its result never pays for the extra call.
       let replyText = turnResult.text;
       const sessionForReply = turnResult.sessionId || currentSessionId;
-      if (!replyText && cli.fetchReplyText && sessionForReply) {
+      if (!replyText && cli.fetchTurnResult && sessionForReply) {
         try {
-          replyText = cli.fetchReplyText(sessionForReply, projectDir);
+          const fetched = cli.fetchTurnResult(sessionForReply, projectDir);
+          replyText = fetched.text;
+
+          // Through the same meter as the streamed path, keyed on the same
+          // session — the reading is the conversation's running total, so a
+          // resumed turn must contribute only what it added.
+          if (fetched.usage) {
+            recordUsage(state.usage, meterFor(cli).observe(sessionForReply, fetched.usage), {
+              memberId: agent,
+              model: runnerOpts.model,
+            });
+            saveUsageHighWater();
+            noteBudget(member);
+            flush();
+          }
         } catch {
           // A verdict that cannot be fetched stays empty, which every gate
           // now reads as unreadable — the safe direction.

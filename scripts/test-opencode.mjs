@@ -35,7 +35,6 @@ const kinds = decoded.map((e) => e.kind);
 assert.equal(kinds[0], 'session', 'the session id comes out first, for --session');
 assert.ok(kinds.includes('tool_call'));
 assert.ok(kinds.includes('tool_result'));
-assert.ok(kinds.includes('usage'));
 assert.equal(kinds[kinds.length - 1], 'result', 'finish() synthesises the terminal event OpenCode never sends');
 
 // A tool_use event carries the call and its result together, so both are
@@ -59,23 +58,33 @@ assert.match(byTool.get('Read').description, /^READ notes\.txt$/);
 const result = decoded[decoded.length - 1];
 assert.equal(result.text, '', 'the terminal event carries no text, because the stream never had any');
 assert.ok(result.sessionId.length > 0, 'but it does carry the session, which is how the reply is fetched');
-assert.equal(typeof openCodeCli.fetchReplyText, 'function', 'so the adapter must provide a way to fetch it');
+assert.equal(typeof openCodeCli.fetchTurnResult, 'function', 'so the adapter must provide a way to fetch it');
 assert.equal(openCodeCli.support.structuredOutput, 'prompted', 'and there is no schema to fall back on');
 
-// ── Usage is per step, except `total`, which is not ──────────────────
+// ── The token counts are not in the stream either ────────────────────
+//
+// step_finish carries usage, but the LAST one of a turn is never sent: this
+// fixture has three step_starts and two step_finishes, and a turn that calls no
+// tools has one and none. Billing off the stream therefore undercounts every
+// turn, and undercounts a plain question all the way to zero — which is exactly
+// what "0 tokens, $0.0000" on a member that had just answered turned out to be.
+//
+// So usage comes from `opencode export` instead, on the same call as the reply.
 
-const readings = decoded.filter((e) => e.kind === 'usage').map((e) => e.reading);
-assert.ok(readings.length >= 2, 'the captured turn reported usage more than once');
-assert.equal(openCodeCli.support.usageReporting, 'delta', 'input/output/cache are per step');
+const starts = captured.filter((line) => JSON.parse(line).type === 'step_start').length;
+const finishes = captured.filter((line) => JSON.parse(line).type === 'step_finish').length;
+assert.ok(finishes < starts, 'the final step_finish of a turn is missing, so the stream cannot be billed');
 
-// Observed: step 1 input=11026, step 2 input=280 while total climbed to 13014.
-// Reading `total` would have counted the first step again.
-assert.ok(
-  readings[1].inputTokens < readings[0].inputTokens,
-  'the second step really is a delta, not a running total',
+assert.deepEqual(
+  decoded.filter((e) => e.kind === 'usage'),
+  [],
+  'so the decoder emits no usage at all — recording both sources would double-bill',
 );
-assert.ok(readings[0].cacheReadTokens >= 0);
-assert.ok(readings.some((r) => r.cacheWriteTokens >= 0), 'unlike Antigravity, cache writes are reported');
+assert.equal(
+  openCodeCli.support.usageReporting,
+  'cumulative',
+  'the export reports the whole session, so a resumed turn must be metered against the last reading',
+);
 
 // ── Noise and edges ──────────────────────────────────────────────────
 

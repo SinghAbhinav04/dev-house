@@ -33,10 +33,12 @@ import { resolveSlot } from '@/lib/team/slots';
 import { memberSpawnOptions } from '@/lib/team/spawn';
 import { SLOT_LABELS, type Roster, type TeamMember } from '@/lib/team/types';
 import {
+  createUsageMeter,
   emptyBreakdown,
   normalizeUsage,
   recordUsage,
   usageFromResultEvent,
+  type TokenUsage,
   type UsageBreakdown,
 } from '@/lib/team/usage';
 
@@ -310,6 +312,30 @@ function streamClaude(
       }
     }
 
+    /**
+     * Bank usage that arrived from a post-hoc fetch rather than the stream.
+     *
+     * Goes through a meter seeded from the state file's high-water marks, for
+     * the same reason the orchestrator does: a fetch like `opencode export`
+     * reports the SESSION's totals, and a chat is many turns against one
+     * session. Recorded raw, turn five would bill turns one through five again.
+     * The chat route is a fresh process per turn, so the marks have to come off
+     * disk — an in-memory meter here would remember nothing.
+     */
+    function recordFetchedUsage(reading: TokenUsage): void {
+      try {
+        const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
+        s.runtime ||= {};
+        const meter = createUsageMeter(resolveCli(opts.cli).support.usageReporting, s.runtime.usageHighWater || {});
+        const delta = meter.observe(newSessionId || agent, reading);
+
+        s.usage = normalizeUsage(s.usage);
+        recordUsage(s.usage as UsageBreakdown, delta, { memberId: agent, model: opts.model });
+        s.runtime.usageHighWater = meter.snapshot();
+        writeJsonAtomic(eventsFile, s);
+      } catch {}
+    }
+
     rl.on('line', (line) => {
       if (!line.trim()) return;
       noteDiagnostic(line);
@@ -326,15 +352,17 @@ function streamClaude(
       // Anything the decoder was still holding back.
       for (const decoded of decoder.finish()) handleEvent(decoded);
 
-      // Some engines never put the reply in the stream, so it has to be
-      // fetched once the process is gone. Without this a chat turn on one of
-      // them answers with silence: the tool calls arrive, the tokens are
-      // counted, and the member appears to have said nothing at all.
+      // Some engines never put the reply OR the token counts in the stream, so
+      // both have to be fetched once the process is gone. Without this a chat
+      // turn on one of them answers with silence and bills nothing: the member
+      // appears to have said nothing and cost nothing.
       const cli = resolveCli(opts.cli);
-      if (!lastResultText && cli.fetchReplyText && newSessionId) {
+      if (!lastResultText && cli.fetchTurnResult && newSessionId) {
         try {
-          lastResultText = cli.fetchReplyText(newSessionId, opts.projectDir);
+          const fetched = cli.fetchTurnResult(newSessionId, opts.projectDir);
+          lastResultText = fetched.text;
           if (lastResultText) appendEvent(eventsFile, agent, 'text', lastResultText);
+          if (fetched.usage) recordFetchedUsage(fetched.usage);
         } catch {
           // A reply that cannot be fetched stays empty rather than failing the
           // turn; the caller already handles an empty answer.

@@ -424,11 +424,23 @@ export function buildDockerArgs(
 
 export class HostRunner implements Runner {
   spawn(opts: RunnerOptions): SpawnedRunnerChild {
-    return withBackend(nodeSpawn(cliFor(opts).binary, buildClaudeArgs(opts), {
+    const child = nodeSpawn(cliFor(opts).binary, buildClaudeArgs(opts), {
       cwd: opts.projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: buildRunnerEnv(opts),
-    }), 'host');
+    });
+
+    // Nothing here ever writes to the child's stdin — the prompt goes in as an
+    // argument — so close it immediately and give the CLI its EOF.
+    //
+    // This is not tidiness. `claude -p` ignores stdin and exits regardless, but
+    // OpenCode accepts a piped prompt, so an open pipe means it waits for input
+    // that will never come: no output, no error, no exit. A member on it just
+    // sat there looking busy. The docker path already passes 'ignore', which is
+    // why only host runs hung.
+    child.stdin?.end();
+
+    return withBackend(child, 'host');
   }
 
   async cleanup(_projectDir: string): Promise<void> {

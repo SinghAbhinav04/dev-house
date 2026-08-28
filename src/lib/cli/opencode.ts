@@ -19,8 +19,9 @@ import { join } from 'node:path';
 import { createOpencodeDecoder } from './opencode-decoder.ts';
 import { OPENCODE_TOOLS } from './opencode-tools.ts';
 import { hasValue, resolvePermissionMode } from './args.ts';
-import type { AgentCli, CliModel, PathLayout, SpawnRequest } from './types.ts';
+import type { AgentCli, CliModel, FetchedTurn, PathLayout, SpawnRequest } from './types.ts';
 import type { MemberPermissionMode } from '../team/types.ts';
+import type { TokenUsage } from '../team/usage.ts';
 
 /**
  * A small, stable set for when the live catalog cannot be read.
@@ -36,15 +37,39 @@ const FALLBACK_MODELS: readonly CliModel[] = [
 /** OpenCode decides tool permissions itself; these are the modes we map onto. */
 const PERMISSION_MODES: readonly MemberPermissionMode[] = ['acceptEdits', 'plan', 'bypassPermissions'];
 
+/** `info.tokens` from an export, which counts the whole session, not the turn. */
+function readSessionUsage(info: unknown): TokenUsage | undefined {
+  const tokens = (info as { tokens?: Record<string, unknown> })?.tokens;
+  if (!tokens || typeof tokens !== 'object') return undefined;
+
+  const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+  const cache = (tokens.cache ?? {}) as Record<string, unknown>;
+  const cost = (info as { cost?: unknown })?.cost;
+
+  return {
+    inputTokens: num(tokens.input),
+    outputTokens: num(tokens.output),
+    cacheReadTokens: num(cache.read),
+    cacheWriteTokens: num(cache.write),
+    totalCostUsd: num(cost),
+    // OpenCode reports reasoning separately, so it is not already inside
+    // `output` and is safe to surface on its own.
+    thinkingTokens: num(tokens.reasoning),
+    unpricedTokens: 0,
+  };
+}
+
 /**
- * The assistant's reply for a session.
+ * What a finished turn actually produced.
  *
- * Runs `opencode export`, which returns `{info, messages}`. The last assistant
- * message's text parts are the reply — and the verdict, since nothing else
- * carries one on this CLI.
+ * Runs `opencode export`, which returns `{info, messages}`. That one call is
+ * the only source for both halves: the last assistant message's text parts are
+ * the reply — and the verdict, since nothing else carries one on this CLI —
+ * while `info.tokens` and `info.cost` are the only usage numbers the CLI will
+ * give up. Its `--format json` stream emits a lone `step-start` and stops.
  */
-export function exportReplyText(sessionId: string, cwd: string): string {
-  if (!sessionId) return '';
+export function exportTurnResult(sessionId: string, cwd: string): FetchedTurn {
+  if (!sessionId) return { text: '' };
 
   let raw: string;
   try {
@@ -56,19 +81,22 @@ export function exportReplyText(sessionId: string, cwd: string): string {
     });
   } catch {
     // A verdict that cannot be fetched is not a verdict. Returning nothing
-    // lets the gate treat it as unreadable, which fails closed.
-    return '';
+    // lets the gate treat it as unreadable, which fails closed. Usage stays
+    // undefined rather than zero — an unknown spend must not bank as a free
+    // turn.
+    return { text: '' };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return '';
+    return { text: '' };
   }
 
+  const usage = readSessionUsage((parsed as { info?: unknown })?.info);
   const messages = (parsed as { messages?: unknown[] })?.messages;
-  if (!Array.isArray(messages)) return '';
+  if (!Array.isArray(messages)) return { text: '', usage };
 
   // Walk backwards: the verdict is the last thing the assistant said.
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -82,10 +110,10 @@ export function exportReplyText(sessionId: string, cwd: string): string {
       .join('\n')
       .trim();
 
-    if (text) return text;
+    if (text) return { text, usage };
   }
 
-  return '';
+  return { text: '', usage };
 }
 
 /**
@@ -167,9 +195,10 @@ export const openCodeCli: AgentCli = {
     resumeReplaysTranscript: true,
     reportsTokens: true,
     reportsCost: true,
-    // step_finish reports input/output/cache per step. `total` is the running
-    // total and is deliberately ignored.
-    usageReporting: 'delta',
+    // Not from the stream — `opencode export` reports the SESSION's totals, so
+    // a resumed turn re-reads everything spent before it. Recording those as
+    // deltas would bank the whole conversation again on every turn.
+    usageReporting: 'cumulative',
   },
 
   // OpenCode maps effort onto a provider-specific --variant, which not every
@@ -181,7 +210,7 @@ export const openCodeCli: AgentCli = {
 
   tools: OPENCODE_TOOLS,
   createDecoder: createOpencodeDecoder,
-  fetchReplyText: exportReplyText,
+  fetchTurnResult: exportTurnResult,
   prepare: writeAgentDefinition,
 
   buildArgs(request: SpawnRequest, layout: PathLayout): string[] {

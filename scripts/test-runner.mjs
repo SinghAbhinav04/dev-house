@@ -211,6 +211,44 @@ rmSync(credentialsTmp, { recursive: true, force: true });
 
 assert.ok(createRunner('host') instanceof HostRunner);
 assert.ok(createRunner('auto') instanceof AutoRunner);
+
+// ── The host runner must close the child's stdin ─────────────────────
+//
+// Nothing here ever writes to it — the prompt goes in as an argument — so an
+// open pipe is pure inheritance from the days when `claude` was the only
+// engine. `claude -p` ignores stdin and exits anyway; `opencode run` accepts a
+// piped prompt and so waits for an EOF that never comes. No output, no error,
+// no exit, and a member that sits there looking busy until the turn times out.
+//
+// Driven against a stub on PATH that drains stdin before exiting — the same
+// thing OpenCode does. If the pipe is left open the stub never returns, so this
+// times out rather than passing quietly.
+{
+  const stubDir = mkdtempSync(join(tmpdir(), 'runner-stdin-'));
+  writeFileSync(join(stubDir, 'claude'), '#!/bin/sh\ncat >/dev/null\nexit 7\n', { mode: 0o755 });
+
+  const spawned = new HostRunner().spawn({
+    cli: 'claude',
+    prompt: 'x',
+    projectDir: process.cwd(),
+    model: 'haiku',
+    systemPrompt: 'stub',
+    capabilities: caps({}),
+    extraEnv: { PATH: stubDir },
+  });
+
+  assert.ok(spawned.stdin === null || spawned.stdin.writableEnded,
+    'the host runner closes the child stdin it never writes to');
+
+  const exit = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('HUNG'), 10_000);
+    spawned.on('close', (code) => { clearTimeout(timer); resolve(code); });
+    spawned.on('error', () => { clearTimeout(timer); resolve('spawn-failed'); });
+  });
+  assert.equal(exit, 7, 'a child that reads to EOF gets one, so it exits instead of waiting forever');
+
+  rmSync(stubDir, { recursive: true, force: true });
+}
 assert.equal(typeof new DockerRunner().isAvailable(), 'boolean');
 const isolated = { pipelineAgent: 'reacty', capabilities: caps({ preferIsolated: true }) };
 assert.equal(new HostRunner().supportsHostFallback(isolated), false);

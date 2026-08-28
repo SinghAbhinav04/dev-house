@@ -15,7 +15,7 @@
 
 import type { AgentDecoder, CanonicalTool } from './decoder.ts';
 import type { Effort, MemberPermissionMode } from '../team/types.ts';
-import type { UsageReporting } from '../team/usage.ts';
+import type { TokenUsage, UsageReporting } from '../team/usage.ts';
 
 export const CLI_IDS = ['claude', 'opencode', 'antigravity'] as const;
 export type CliId = (typeof CLI_IDS)[number];
@@ -180,14 +180,30 @@ export interface AgentCli {
    */
   prepare?(request: SpawnRequest, layout: PathLayout): void;
   /**
-   * Fetch the turn's reply after the process exits, for CLIs that do not put
-   * it in the stream.
+   * Fetch what the turn actually did, after the process exits, for CLIs that
+   * do not put it in the stream.
    *
-   * OpenCode is the reason this exists: its JSON stream carries tool calls and
-   * token counts but never the assistant's text, and it has no structured
-   * output either — so without a second call there is no verdict to read at
-   * all. Left undefined by engines whose reply arrives in the stream, which is
+   * OpenCode is the reason this exists, and it needs more than the text: its
+   * `--format json` stream carries a single `step-start` and nothing else — no
+   * assistant text, no token counts, no terminal event. Both the reply and the
+   * usage have to be fetched afterwards, and they come from the same place, so
+   * one call returns both rather than paying for two processes.
+   *
+   * Left undefined by engines whose stream carries its own result, which is
    * where it belongs.
    */
-  fetchReplyText?(sessionId: string, projectDir: string): string;
+  fetchTurnResult?(sessionId: string, projectDir: string): FetchedTurn;
+}
+
+/** What a post-hoc fetch can recover about a finished turn. */
+export interface FetchedTurn {
+  /** The assistant's reply, or '' when it could not be read. */
+  text: string;
+  /**
+   * Session usage, when the fetch carries it.
+   *
+   * Interpreted per the adapter's `usageReporting`. Undefined means unknown,
+   * which is not the same as zero — zero would silently bank a free turn.
+   */
+  usage?: TokenUsage;
 }

@@ -129,8 +129,19 @@ export function createOpencodeDecoder(): AgentDecoder {
 
     if (type === 'step_finish' && part) {
       sawAnything = true;
-      const usage = readUsage(part);
-      if (usage) out.push({ kind: 'usage', sessionKey: sessionId, reading: usage });
+
+      // Deliberately NOT emitted as usage, even though the numbers are right
+      // there. OpenCode omits the FINAL step_finish of a turn: a tool-using
+      // turn shows three step_starts and two step_finishes, and a turn that
+      // calls no tools at all shows one and none — so the stream reports every
+      // step except the one that produced the answer. Billing off it silently
+      // undercounts, and on a plain question undercounts to zero.
+      //
+      // The whole turn is read from `opencode export` instead, which is the
+      // same call the reply already needs. Recording both would double-bill,
+      // and they are not even the same unit — these are per-step deltas, that
+      // is a session total.
+      void readUsage(part);
       return out;
     }
 
