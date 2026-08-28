@@ -5,6 +5,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Badge } from '@/components/shared/Badge';
 import { AutoGrowTextarea } from '@/components/shared/AutoGrowTextarea';
 import { MarkdownText } from '@/components/shared/MarkdownText';
+import { ArtifactCard, PlanMarkdown } from '@/components/plan/PlanViewer';
 import { LunarOfficeScene, type SeatMap } from '@/components/mission/LunarOfficeScene';
 import { SecurityAuditPanel } from '@/components/agents/SecurityAuditPanel';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
@@ -37,6 +38,31 @@ const PHASE_PROGRESS: Record<string, number> = {
 const MODEL_OPTIONS = MODEL_ALIASES.map((value) => ({ value, label: value }));
 
 /** Avatar text. Member ids are arbitrary length, so never render one raw. */
+/**
+ * Long enough that inlining it costs you the rest of the feed.
+ *
+ * Chosen by what it does to the screen rather than by any property of the
+ * text: past roughly this size a message stops being something you read in
+ * passing and becomes something you scroll, and everything above it is gone.
+ */
+const LONG_FORM_LINES = 14;
+const LONG_FORM_CHARS = 900;
+
+function isLongForm(event: { type?: string; text?: string }): boolean {
+  if (event.type !== 'text' || !event.text) return false;
+  return event.text.split('\n').length > LONG_FORM_LINES || event.text.length > LONG_FORM_CHARS;
+}
+
+/** The first heading or sentence, so the card says what it is holding. */
+function documentTitle(text: string): string {
+  const heading = text.split('\n').find((line) => /^#{1,3}\s+\S/.test(line.trim()));
+  if (heading) return heading.replace(/^#+\s*/, '').replace(/[*_`]/g, '').trim().slice(0, 80);
+
+  const first = text.split('\n').find((line) => line.trim().length > 0)?.trim() ?? 'Long answer';
+  const sentence = first.split(/(?<=[.:!?])\s/)[0];
+  return (sentence.length > 80 ? `${sentence.slice(0, 77)}…` : sentence).replace(/[*_`#]/g, '');
+}
+
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
@@ -872,7 +898,11 @@ export default function PipelinePage() {
             <button onClick={() => { setPipelineStarted(false); completionNotifiedRef.current = false; stopPipeline(); setSendingAgents(new Set()); }} className="rounded-lg bg-signal-bad px-4 py-2 text-sm font-bold text-ink transition hover:bg-signal-bad">
               STOP
             </button>
-            {isPipeline && state.events.some(e => e.text?.includes('plan.md')) && (
+            {/* Gated on the run having got as far as planning, not on some
+                event happening to mention "plan.md" — that substring match
+                hid the button whenever the plan was written without the
+                filename being spoken aloud. */}
+            {isPipeline && state.currentPhase !== 'concept' && (
               <button onClick={handleViewPlan} className="rounded-lg border border-line bg-surface-raised px-4 py-2 text-sm text-ink hover:bg-surface-raised">
                 View Plan
               </button>
@@ -908,7 +938,11 @@ export default function PipelinePage() {
               <div className="text-[13px] font-semibold text-[var(--ink-soft)]">{supervisor ? supervisor.name : 'No supervisor'}</div>
               <div className="text-[10px] text-[var(--ink-faint)]">{isPipeline ? 'Recommended front door. Direct specialist chat still works.' : 'Oversight & diagnostics'}</div>
             </div>
-            {isPipeline && state.events.some(e => e.text?.includes('plan.md')) && (
+            {/* Gated on the run having got as far as planning, not on some
+                event happening to mention "plan.md" — that substring match
+                hid the button whenever the plan was written without the
+                filename being spoken aloud. */}
+            {isPipeline && state.currentPhase !== 'concept' && (
               <button onClick={handleViewPlan} className="ml-auto rounded border border-line bg-surface-raised px-2.5 py-0.5 text-[11px] text-ink hover:bg-surface-raised">
                 View Plan
               </button>
@@ -955,7 +989,22 @@ export default function PipelinePage() {
                 <span className="mr-1.5 text-[9px] text-ink-faint">
                   {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </span>
-                <MarkdownText>{e.text}</MarkdownText>
+                {/* A long answer is a document, not a chat message. Inline, it
+                    pushes everything else off the screen and cannot be scrolled
+                    back to; as a card it stays one line and opens rendered,
+                    with any mermaid actually drawn. */}
+                {isLongForm(e) ? (
+                  <ArtifactCard
+                    title={documentTitle(e.text)}
+                    subtitle={`${e.text.split('\n').length} lines · ${memberName(e.agent)}`}
+                    onOpen={() => {
+                      setPlanContent(e.text);
+                      setShowPlan(true);
+                    }}
+                  />
+                ) : (
+                  <MarkdownText>{e.text}</MarkdownText>
+                )}
               </div>
             ))}
           </div>
@@ -1191,7 +1240,17 @@ export default function PipelinePage() {
               <h2 className="text-lg font-semibold text-ink">plan.md</h2>
               <button onClick={() => setShowPlan(false)} className="text-2xl text-ink-faint hover:text-ink">&times;</button>
             </div>
-            <pre className="mt-4 whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-soft">{planContent || 'No plan yet.'}</pre>
+            {/* Rendered, not printed. A plan is read far more often than it is
+                written, and a hundred lines of markdown syntax sat between the
+                reader and the plan. A ```mermaid fence becomes the diagram it
+                describes, which is the point of asking a planner for one. */}
+            <div className="mt-4">
+              {planContent ? (
+                <PlanMarkdown content={planContent} />
+              ) : (
+                <p className="text-sm text-ink-faint">No plan yet.</p>
+              )}
+            </div>
           </div>
         </div>
       )}
