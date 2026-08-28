@@ -65,6 +65,30 @@ assert.equal(badEnums.slot, null, 'unknown slot becomes null');
 assert.equal(badEnums.permissionMode, 'auto', 'unknown permission mode falls back');
 assert.equal(badEnums.effort, 'high', 'unknown effort falls back');
 
+// ── Which CLI a member runs on ───────────────────────────────────────
+//
+// Every roster on disk predates members having a choice of engine, so the
+// absent field has to read as the engine they were already running. This is
+// the whole migration — there is no version bump and no rewrite step.
+
+assert.equal(defaulted.cli, 'claude', 'a member with no cli field runs where it always ran');
+
+assert.equal(
+  normalizeRoster({ members: [{ id: 'z', cli: 'opencode' }] }).members[0].cli,
+  'opencode',
+  'an explicit choice is kept',
+);
+assert.equal(
+  normalizeRoster({ members: [{ id: 'z', cli: 'gpt-cli' }] }).members[0].cli,
+  'claude',
+  'an unrecognised engine falls back rather than reaching the runner',
+);
+assert.equal(
+  normalizeRoster({ members: [{ id: 'z', cli: 42 }] }).members[0].cli,
+  'claude',
+  'and a non-string does not throw on the way',
+);
+
 // ── clampCapabilities ────────────────────────────────────────────────
 
 assert.equal(

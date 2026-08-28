@@ -6,6 +6,8 @@
  * is answered by resolving a slot against the roster.
  */
 
+import type { CliId } from '../cli/types.ts';
+
 // ── Slots ────────────────────────────────────────────────────────────
 
 /**
@@ -133,6 +135,14 @@ export interface TeamMember {
   sprite: string;
   /** Which seat this member fills, or null for chat/handoff only. */
   slot: SlotId | null;
+  /**
+   * Which agent CLI this member runs on.
+   *
+   * Absent on any roster written before members had a choice, which the
+   * normaliser reads as Claude Code. Model ids are CLI-specific — `opus` means
+   * nothing to Antigravity — so this and `model` have to be changed together.
+   */
+  cli: CliId;
   /** Model alias or full model id. Empty string means "use the team default". */
   model: string;
   permissionMode: MemberPermissionMode;

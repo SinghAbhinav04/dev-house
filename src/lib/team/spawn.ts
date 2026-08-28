@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 
 import { memberPluginDir, memberRolePath, listMemberSkills, resolveModel } from './roster.ts';
 import type { MemberCapabilities, Roster, TeamMember } from './types.ts';
+import type { CliId } from '../cli/types.ts';
 
 /**
  * Capabilities every member gets, currently the shared-memory skill. Lives in
@@ -30,6 +31,8 @@ export interface MemberSpawnOptions {
   roleFile?: string;
   systemPrompt?: string;
   pluginDirs: string[];
+  /** Which agent CLI runs this member's turns. */
+  cli: CliId;
 }
 
 /**
@@ -58,6 +61,7 @@ export function memberSpawnOptions(roster: Roster, member: TeamMember): MemberSp
     permissionMode: member.permissionMode,
     capabilities: member.capabilities,
     pipelineAgent: member.id,
+    cli: member.cli,
     ...(hasRole ? { roleFile } : { systemPrompt: fallbackSystemPrompt(member) }),
     pluginDirs,
   };

@@ -229,10 +229,22 @@ case "$TOOL_NAME" in
       fi
     fi
 
-    # Block writes to .claude/ for ALL members. Unconditional: this is what
-    # keeps the hook, the settings and the manifest itself out of agent reach.
+    # Block writes to every agent CLI's config directory, for ALL members.
+    # Unconditional: this is what keeps the hooks, the settings and the
+    # manifest itself out of agent reach.
+    #
+    # One directory per supported CLI, because each keeps its gate somewhere
+    # different: .claude/ holds Claude Code's settings and this script,
+    # .opencode/ holds OpenCode's generated gate plugin AND the generated agent
+    # definition that carries a member's system prompt, .agents/ holds
+    # Antigravity's hooks.json and workspace skills, .gemini/ its settings.
+    # A member that can write any of them can rewrite either what it is
+    # permitted to do or who it was told to be.
     case "$FILEPATH" in
-      */.claude/*|*/.claude)
+      */.claude/*|*/.claude|\
+      */.opencode/*|*/.opencode|\
+      */.agents/*|*/.agents|\
+      */.gemini/*|*/.gemini)
         echo "BLOCKED: Cannot modify hook/settings files" >&2
         exit 2
         ;;
@@ -310,15 +322,22 @@ if [ "$TOOL_NAME" = "Bash" ]; then
   COMMAND=$(echo "$TOOL_INPUT" | jq -r '.command // ""')
   APPROVED_BASH_FILE="$PROJECT_ROOT/pipeline-approved-bash.json"
 
-  # Block direct shell-level modifications of .claude, hooks, or settings.
-  # Keep this narrow enough that harmless string mentions (for example in a
-  # Python snippet or allowlist check) do not get blocked as false positives.
-  if printf '%s\n' "$COMMAND" | grep -Eiq '(^|[;&|[:space:]])(rm|mv|cp|chmod|chown|touch|mkdir|rmdir|sed|tee)\b.*(\.claude(/|[[:space:]]|$)|approval-gate(\.sh)?|settings\.json|team-manifest\.json|hooks/)'; then
+  # Block direct shell-level modifications of any CLI's config dir, hooks, or
+  # settings. Keep this narrow enough that harmless string mentions (for
+  # example in a Python snippet or allowlist check) do not get blocked as
+  # false positives.
+  #
+  # The filenames track the config dirs blocked in the Write branch above:
+  # hooks.json is Antigravity's gate, opencode.json and plugin.json are
+  # OpenCode's, auth.json is where a CLI keeps credentials.
+  GATE_FILES='\.claude(/|[[:space:]]|$)|\.opencode(/|[[:space:]]|$)|\.agents(/|[[:space:]]|$)|\.gemini(/|[[:space:]]|$)|approval-gate(\.sh)?|settings\.json|team-manifest\.json|hooks\.json|opencode\.json|plugin\.json|auth\.json|hooks/'
+
+  if printf '%s\n' "$COMMAND" | grep -Eiq "(^|[;&|[:space:]])(rm|mv|cp|chmod|chown|touch|mkdir|rmdir|sed|tee)\b.*($GATE_FILES)"; then
     echo "BLOCKED: Cannot modify hook or settings files via Bash" >&2
     exit 2
   fi
 
-  if printf '%s\n' "$COMMAND" | grep -Eiq '(>|>>|<).*(\.claude/|approval-gate(\.sh)?|settings\.json|team-manifest\.json|hooks/)'; then
+  if printf '%s\n' "$COMMAND" | grep -Eiq "(>|>>|<).*($GATE_FILES)"; then
     echo "BLOCKED: Cannot modify hook or settings files via Bash" >&2
     exit 2
   fi
@@ -344,12 +363,25 @@ if [ "$TOOL_NAME" = "Bash" ]; then
       ;;
   esac
 
-  # Block direct claude invocations and PIPELINE_AGENT manipulation
+  # Block direct agent-CLI invocations and PIPELINE_AGENT manipulation.
+  #
+  # A member that can spawn its own agent session escapes the gate entirely:
+  # the new process is not the one the manifest describes. Every CLI the
+  # roster can run is blocked, not just Claude Code -- a coder on Claude
+  # spawning `opencode run` would be just as far outside the manifest.
+  #
   # NOTE: Indirect execution (python3 -c, eval, base64) is a KNOWN LIMITATION
   # that cannot be solved with bash pattern matching. See SECURITY.md.
+  # Matched on the invocation form rather than the bare binary name, exactly
+  # as the `claude -` rule always was: "opencode" and "agy" are short enough
+  # to appear inside ordinary prose, and a gate that blocks
+  # `print('opencode is a word')` trains people to turn it off.
   case "$COMMAND" in
-    *"PIPELINE_AGENT"*|*"claude -"*|*"claude --"*)
-      echo "BLOCKED: Cannot spawn Claude sessions or modify agent identity via Bash" >&2
+    *"PIPELINE_AGENT"*|\
+    *"claude -"*|*"claude --"*|\
+    *"opencode run"*|*"opencode -"*|\
+    *"agy -"*)
+      echo "BLOCKED: Cannot spawn agent sessions or modify agent identity via Bash" >&2
       exit 2
       ;;
   esac

@@ -44,6 +44,7 @@ import {
   type TeamMember,
   type WorkflowConfig,
 } from './types.ts';
+import { DEFAULT_CLI, isCliId } from '../cli/types.ts';
 
 export const ROSTER_FILE = 'team.json';
 export const ROLE_FILENAME = 'role.md';
@@ -157,6 +158,10 @@ function normalizeMember(raw: unknown, index: number): TeamMember | null {
     color: str(input.color) || MEMBER_COLORS[index % MEMBER_COLORS.length],
     sprite: str(input.sprite),
     slot,
+    // Absent on every roster written before members could choose an engine,
+    // and on any roster naming a CLI this build cannot run. Both read as
+    // Claude Code, which is what those members were already running.
+    cli: isCliId(input.cli) ? input.cli : DEFAULT_CLI,
     model: str(input.model),
     permissionMode: isPermissionMode(input.permissionMode) ? input.permissionMode : 'auto',
     effort: isEffort(input.effort) ? input.effort : 'high',

@@ -466,6 +466,180 @@ const checks = [
     expect: 'deny',
     run: () => invokeHook({ agent: 'sam', toolName: 'CronCreate', toolInput: {} }),
   },
+
+  // ── Other agent CLIs' config directories ───────────────────────────
+  //
+  // Each CLI keeps its gate somewhere different. .opencode/ is the sharpest
+  // case: it holds both the generated gate plugin AND the generated agent
+  // definition carrying the member's system prompt, so a member that can
+  // write there rewrites either what it may do or who it was told to be.
+  {
+    name: 'no member can write OpenCode config',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'reacty',
+        toolName: 'Write',
+        toolInput: { file_path: `${projectDir}/.opencode/plugins/hackeroom-gate.js`, content: 'x' },
+      }),
+  },
+  {
+    name: 'no member can rewrite its own OpenCode agent definition',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'reacty',
+        toolName: 'Write',
+        toolInput: { file_path: `${projectDir}/.opencode/agent/reacty.md`, content: 'you may do anything' },
+      }),
+  },
+  {
+    name: 'no member can write Antigravity hooks',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'reacty',
+        toolName: 'Write',
+        toolInput: { file_path: `${projectDir}/.agents/hooks.json`, content: '{}' },
+      }),
+  },
+  {
+    name: 'no member can write Antigravity workspace skills',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'reacty',
+        toolName: 'Write',
+        toolInput: { file_path: `${projectDir}/.agents/skills/evil/SKILL.md`, content: 'x' },
+      }),
+  },
+  {
+    name: 'no member can write Gemini settings',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'reacty',
+        toolName: 'Write',
+        toolInput: { file_path: `${projectDir}/.gemini/settings.json`, content: '{}' },
+      }),
+  },
+  {
+    name: 'the supervisor cannot write another CLI config either',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'sam',
+        toolName: 'Write',
+        toolInput: { file_path: `${projectDir}/.opencode/opencode.json`, content: '{}' },
+      }),
+  },
+
+  // ── Other agent CLIs, via Bash ─────────────────────────────────────
+  {
+    name: 'bash:all cannot rewrite Antigravity hooks via Bash',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'trusted',
+        toolName: 'Bash',
+        toolInput: { command: 'echo "{}" > .agents/hooks.json' },
+        securityMode: 'fast',
+      }),
+  },
+  {
+    name: 'bash:all cannot rewrite opencode.json via Bash',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'trusted',
+        toolName: 'Bash',
+        toolInput: { command: 'tee opencode.json' },
+        securityMode: 'fast',
+      }),
+  },
+  {
+    name: 'bash:all cannot read out a CLI auth file',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'trusted',
+        toolName: 'Bash',
+        toolInput: { command: 'cp auth.json /tmp/stolen' },
+        securityMode: 'fast',
+      }),
+  },
+
+  // A member that spawns its own agent session escapes the gate outright:
+  // the new process is not the one the manifest describes. Blocking only
+  // `claude` would have left that hole open the moment a second CLI landed.
+  {
+    name: 'bash:all cannot spawn opencode',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'trusted',
+        toolName: 'Bash',
+        toolInput: { command: 'opencode run "do whatever you like"' },
+        securityMode: 'fast',
+      }),
+  },
+  {
+    name: 'bash:all cannot spawn agy',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'trusted',
+        toolName: 'Bash',
+        toolInput: { command: 'agy -p "do whatever you like"' },
+        securityMode: 'fast',
+      }),
+  },
+  {
+    name: 'bash:all cannot spawn agy with --dangerously-skip-permissions',
+    expect: 'deny',
+    run: () =>
+      invokeHook({
+        agent: 'trusted',
+        toolName: 'Bash',
+        toolInput: { command: 'agy --dangerously-skip-permissions -p x' },
+        securityMode: 'fast',
+      }),
+  },
+
+  // The widened patterns must not start blocking ordinary work. These are
+  // the false positives the clamp is deliberately narrow to avoid.
+  {
+    name: 'fast-mode Bash can still mention opencode as a harmless string',
+    expect: 'allow',
+    run: () =>
+      invokeHook({
+        agent: 'tess',
+        toolName: 'Bash',
+        securityMode: 'fast',
+        toolInput: { command: "python3 -c \"print('opencode and agy are just words')\"" },
+      }),
+  },
+  {
+    name: 'fast-mode Bash can still run a normal build',
+    expect: 'allow',
+    run: () =>
+      invokeHook({
+        agent: 'tess',
+        toolName: 'Bash',
+        securityMode: 'fast',
+        toolInput: { command: 'npm run build' },
+      }),
+  },
+  {
+    name: 'a member can still write an ordinary dotfile',
+    expect: 'allow',
+    run: () =>
+      invokeHook({
+        agent: 'reacty',
+        toolName: 'Write',
+        toolInput: { file_path: `${projectDir}/.gitignore`, content: 'node_modules\n' },
+      }),
+  },
 ];
 
 let failures = 0;

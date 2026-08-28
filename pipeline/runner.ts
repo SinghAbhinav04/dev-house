@@ -5,6 +5,20 @@ import { basename, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
 import type { MemberCapabilities } from '../src/lib/team/types.ts';
+import { resolveCli } from '../src/lib/cli/registry.ts';
+import type { AgentCli, CliId } from '../src/lib/cli/types.ts';
+
+/**
+ * The adapter for a spawn.
+ *
+ * Falls back rather than throwing: the runner is the wrong place to refuse an
+ * unknown CLI, because by the time a turn is spawning the run has already
+ * started. Validation happens when the roster is saved and again at run start,
+ * where refusing still means "this run does not begin".
+ */
+function cliFor(opts: RunnerOptions): AgentCli {
+  return resolveCli(opts.cli);
+}
 
 /**
  * Members are user-authored, so an id is any roster slug — not a fixed letter.
@@ -37,6 +51,11 @@ export interface RunnerOptions {
   capabilities?: MemberCapabilities;
   /** Directories passed to `claude --plugin-dir`, carrying the member's skills. */
   pluginDirs?: string[];
+  /**
+   * Which agent CLI runs this turn. Omitted means Claude Code, which is what
+   * every roster written before this was a choice implies.
+   */
+  cli?: CliId;
   extraEnv?: NodeJS.ProcessEnv;
   templateFiles?: string[];
   forceHost?: boolean;
@@ -458,7 +477,7 @@ export function buildDockerArgs(
 
   dockerArgs.push(
     DOCKER_IMAGE,
-    '/usr/local/share/npm-global/bin/claude',
+    cliFor(opts).containerBinary,
     ...buildContainerClaudeArgs(opts),
   );
 
@@ -467,7 +486,7 @@ export function buildDockerArgs(
 
 export class HostRunner implements Runner {
   spawn(opts: RunnerOptions): SpawnedRunnerChild {
-    return withBackend(nodeSpawn('claude', buildClaudeArgs(opts), {
+    return withBackend(nodeSpawn(cliFor(opts).binary, buildClaudeArgs(opts), {
       cwd: opts.projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: buildRunnerEnv(opts),

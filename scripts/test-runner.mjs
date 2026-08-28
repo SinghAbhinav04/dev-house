@@ -23,6 +23,7 @@ import {
   isRecoverableDockerAuthFailure,
   shouldPreferDocker,
 } from '../pipeline/runner.ts';
+import { claudeCli } from '../src/lib/cli/claude.ts';
 
 const roleArgs = buildClaudeArgs({
   prompt: 'build me a tiny app',
@@ -339,6 +340,22 @@ assert.ok(
     containerLayout({ prompt: 'x', projectDir: '/tmp/p', model: 'sonnet', systemPrompt: 'inline' }),
   ).includes('--system-prompt'),
   'an inline system prompt needs no mount, so it survives the container layout',
+);
+
+// ── The binary comes from the adapter, not from a literal ────────────
+
+const dockerCliArgs = buildDockerArgs(
+  { prompt: 'x', projectDir: '/tmp/p', model: 'sonnet', systemPrompt: 'p', pipelineAgent: 'pat' },
+  { source: 'none', mountArgs: [], cleanup: () => {} },
+  '/tmp/mounted',
+);
+assert.ok(
+  dockerCliArgs.includes(claudeCli.containerBinary),
+  'the container is told which binary to run by the adapter, so a second CLI needs no change here',
+);
+assert.ok(
+  !dockerCliArgs.includes('claude'),
+  'and never a bare name that would depend on the container PATH',
 );
 
 console.log('runner checks passed');
