@@ -169,4 +169,15 @@ export interface AgentCli {
   createDecoder(): AgentDecoder;
   /** The argv for one turn, against a given view of the filesystem. */
   buildArgs(request: SpawnRequest, layout: PathLayout): string[];
+  /**
+   * Fetch the turn's reply after the process exits, for CLIs that do not put
+   * it in the stream.
+   *
+   * OpenCode is the reason this exists: its JSON stream carries tool calls and
+   * token counts but never the assistant's text, and it has no structured
+   * output either — so without a second call there is no verdict to read at
+   * all. Left undefined by engines whose reply arrives in the stream, which is
+   * where it belongs.
+   */
+  fetchReplyText?(sessionId: string, projectDir: string): string;
 }

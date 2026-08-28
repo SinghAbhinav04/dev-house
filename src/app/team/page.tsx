@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useTeam, type CliOption, type TeamMemberView } from '@/lib/use-team';
 import type { CliId } from '@/lib/cli/types';
+import { ProviderPicker } from '@/components/team/ProviderPicker';
 import type { TeamProposal } from '@/lib/team/proposal';
 import {
   EFFORT_LEVELS,
@@ -797,26 +798,35 @@ function MemberDetail({
               </select>
             </Field>
 
-            <Field label="Model" hint={modelHint}>
-              <select
-                value={member.model}
-                onChange={(e) => onUpdate({ model: e.target.value })}
-                className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
-              >
-                {/* The empty option has to say what it will actually resolve
-                    to. "Team default" is only true for a member on the team's
-                    own engine — for anyone else the team model is a name their
-                    CLI has never heard of, so resolveModel falls back to that
-                    CLI's default instead. Labelling it "Team default" there
-                    described something that would not happen. */}
-                <option value="">{defaultModelLabel}</option>
-                {(cli?.models ?? []).map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            {/* OpenCode reaches hundreds of models across whichever providers
+                you have credentials for, so it gets a provider-then-model
+                picker of its own rather than one unusable flat list. */}
+            {member.cli === 'opencode' ? (
+              <div className="sm:col-span-2">
+                <ProviderPicker model={member.model} onModel={(value) => onUpdate({ model: value })} />
+              </div>
+            ) : (
+              <Field label="Model" hint={modelHint}>
+                <select
+                  value={member.model}
+                  onChange={(e) => onUpdate({ model: e.target.value })}
+                  className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+                >
+                  {/* The empty option has to say what it will actually resolve
+                      to. "Team default" is only true for a member on the team's
+                      own engine — for anyone else the team model is a name their
+                      CLI has never heard of, so resolveModel falls back to that
+                      CLI's default instead. Labelling it "Team default" there
+                      described something that would not happen. */}
+                  <option value="">{defaultModelLabel}</option>
+                  {(cli?.models ?? []).map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
 
             <Field label="Permission mode" hint={PERMISSION_HELP[member.permissionMode]}>
               <select

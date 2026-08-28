@@ -1112,14 +1112,30 @@ async function runClaudeTurn(
 
       settled = true;
       clearActiveTurn(agent);
+
+      // Some engines do not put the reply in the stream at all, so it has to
+      // be fetched once the process is gone. Only attempted when the stream
+      // genuinely gave us nothing, so an engine that does stream its reply
+      // never pays for the extra call.
+      let replyText = turnResult.text;
+      const sessionForReply = turnResult.sessionId || currentSessionId;
+      if (!replyText && cli.fetchReplyText && sessionForReply) {
+        try {
+          replyText = cli.fetchReplyText(sessionForReply, projectDir);
+        } catch {
+          // A verdict that cannot be fetched stays empty, which every gate
+          // now reads as unreadable — the safe direction.
+        }
+      }
+
       resolve({
         // From the decoded event, not from its raw payload. Reading
         // `raw.result` and `raw.session_id` here meant the decoder's job
         // stopped at the last step and Claude's wire keys leaked back out —
         // on any other CLI those keys do not exist and both would silently
         // come back empty.
-        result: turnResult.text,
-        sessionId: turnResult.sessionId || currentSessionId,
+        result: replyText,
+        sessionId: sessionForReply,
         structured,
         permissionDenied,
         interruptedForApproval,

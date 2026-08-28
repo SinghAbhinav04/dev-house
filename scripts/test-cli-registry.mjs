@@ -35,15 +35,18 @@ assert.equal(DEFAULT_CLI, 'claude', 'the default is what every existing member i
 // installed and self-tested.
 
 const available = availableClis().map((cli) => cli.id);
-assert.deepEqual(available.sort(), ['antigravity', 'claude'], 'Claude Code and Antigravity have adapters');
+assert.deepEqual(
+  available.sort(),
+  ['antigravity', 'claude', 'opencode'],
+  'all three engines have adapters',
+);
 
 for (const id of available) {
   assert.ok(CLI_IDS.includes(id), `${id} is a known id`);
 }
 
 assert.equal(findCli('claude'), claudeCli);
-assert.equal(findCli('opencode'), null, 'a known id with no adapter yet resolves to nothing');
-assert.equal(findCli('nonsense'), null);
+assert.equal(findCli('nonsense'), null, 'an id that is not an id at all resolves to nothing');
 assert.equal(findCli(undefined), null);
 
 // Every registered adapter has to be complete enough to actually spawn with.
@@ -70,16 +73,20 @@ for (const cli of availableClis()) {
 
 assert.equal(resolveCli(undefined), claudeCli, 'a roster with no cli field reads as Claude Code');
 assert.equal(resolveCli(''), claudeCli);
-assert.equal(resolveCli('opencode'), claudeCli, 'an id with no adapter falls back rather than crashing a live run');
+assert.equal(
+  resolveCli('a-cli-that-does-not-exist'),
+  claudeCli,
+  'an unrecognised engine falls back rather than crashing a live run',
+);
 
 assert.equal(requireCli('claude'), claudeCli);
 assert.throws(
-  () => requireCli('opencode'),
-  /No adapter for CLI 'opencode'/,
+  () => requireCli('a-cli-that-does-not-exist'),
+  /No adapter for CLI/,
   'refusing names the CLI that is missing',
 );
 assert.throws(
-  () => requireCli('opencode'),
+  () => requireCli('a-cli-that-does-not-exist'),
   /can run: /,
   'and what this build can run instead',
 );

@@ -12,7 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { installGates, GateInstallError } = await import(join(repoRoot, 'src/lib/cli/gates.ts'));
 const { antigravityCli } = await import(join(repoRoot, 'src/lib/cli/antigravity.ts'));
 const { claudeCli } = await import(join(repoRoot, 'src/lib/cli/claude.ts'));
+const { openCodeCli } = await import(join(repoRoot, 'src/lib/cli/opencode.ts'));
 
 const pipelineDir = join(repoRoot, 'pipeline');
 
@@ -170,6 +171,45 @@ check('a missing shim in the build is caught', () => {
     assert.throws(
       () => installGates(projectDir, join(root, 'no-such-pipeline-dir'), [antigravityCli], 'reacty'),
       /missing from this build/,
+    );
+  } finally {
+    process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+check('an OpenCode gate installs and verifies', () => {
+  const { root, home, projectDir } = makeProject();
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    installGates(projectDir, pipelineDir, [openCodeCli], 'reacty');
+  } finally {
+    process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+check('OpenCode gets exactly ONE plugin directory', () => {
+  const { root, home, projectDir } = makeProject();
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    // OpenCode loads from both .opencode/plugin/ and .opencode/plugins/. The
+    // probe planted one in each and watched the hook fire TWICE per tool call
+    // — which would spend the strict-mode approval grant on the first
+    // invocation and refuse the second. So a stale rival directory must be
+    // cleared, not merely not-written.
+    mkdirSync(join(projectDir, '.opencode', 'plugins'), { recursive: true });
+    writeFileSync(join(projectDir, '.opencode', 'plugins', 'stale.js'), 'export const Stale = async () => ({});');
+
+    installGates(projectDir, pipelineDir, [openCodeCli], 'reacty');
+
+    assert.ok(existsSync(join(projectDir, '.opencode', 'plugin', 'hackeroom-gate.js')), 'the gate is planted');
+    assert.equal(
+      existsSync(join(projectDir, '.opencode', 'plugins')),
+      false,
+      'and the other directory is cleared, or every call would be gated twice',
     );
   } finally {
     process.env.HOME = previousHome;
