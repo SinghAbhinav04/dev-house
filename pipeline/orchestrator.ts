@@ -18,7 +18,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, copyFileSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join, resolve, basename } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import {
@@ -31,7 +31,6 @@ import {
   type PendingApproval,
 } from '../src/lib/pipeline-approval.ts';
 import {
-  extractStructuredSignal,
   isPositiveSignal,
   isUnparseableSignal,
   parseTextSignal,
@@ -69,8 +68,8 @@ import { buildRunPlan, describeRunPlan } from '../src/lib/team/slots.ts';
 import { writeTeamManifest } from '../src/lib/team/manifest.ts';
 import { memberSpawnOptions } from '../src/lib/team/spawn.ts';
 import { buildMemorySelection, ensureMemoryDirs, ingestInbox } from '../src/lib/team/memory.ts';
-import { summarizeToolResult } from '../src/lib/events.ts';
 import { writeJsonAtomic } from '../src/lib/atomic-write.ts';
+import { createClaudeDecoder } from '../src/lib/cli/decoder.ts';
 import {
   billableTokens,
   emptyBreakdown,
@@ -745,7 +744,10 @@ async function runClaudeTurn(
     let lastResult: Record<string, unknown> | null = null;
     let currentSessionId = opts.resume || '';
     let structured: Record<string, unknown> | null = null;
-    const toolNames = new Map<string, string>();
+    const decoder = createClaudeDecoder();
+    // Kept here rather than in the decoder: this is the input the *approval
+    // card* replays back to the user, which is a concern of the run rather
+    // than of the wire format.
     const toolInputs = new Map<string, Record<string, unknown>>();
     let permissionDenied: { toolName: string; toolInput: Record<string, unknown> } | null = null;
     let interruptedForApproval = false;
@@ -807,149 +809,92 @@ async function runClaudeTurn(
       lastStreamActivityAt = Date.now();
       noteActiveTurnActivity(agent);
 
-      let event: Record<string, unknown>;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        return;
-      }
+      // Parsing lives in the decoder; what to *do* about each event stays
+      // here, because only the orchestrator can resolve the turn or kill the
+      // child.
+      for (const decoded of decoder.push(line)) {
+        if (decoded.kind === 'session') {
+          currentSessionId = decoded.sessionId || currentSessionId;
+          if (currentSessionId) saveSession(agent, currentSessionId);
+          continue;
+        }
 
-      const type = event.type as string;
+        if (decoded.kind === 'text') {
+          emit(agent, state.currentPhase, 'text', decoded.text);
+          continue;
+        }
 
-      if (type === 'system') {
-        currentSessionId = (event.session_id as string) || currentSessionId;
-        if (currentSessionId) saveSession(agent, currentSessionId);
-      } else if (type === 'assistant') {
-        const msg = event.message as Record<string, unknown>;
-        const content = msg?.content as Array<Record<string, unknown>>;
-        if (!content) return;
+        if (decoded.kind === 'tool_call') {
+          if (decoded.callId) toolInputs.set(decoded.callId, decoded.input);
+          emit(agent, state.currentPhase, 'tool_call', decoded.description, decoded.detail);
+          if (decoded.tool === 'Bash') bashInFlight = true;
+          continue;
+        }
 
-        for (const block of content) {
-          if (block.type === 'tool_use') {
-            const toolName = block.name as string;
-            const input = block.input as Record<string, unknown>;
-            const toolUseId = block.id as string;
-            if (toolUseId) {
-              toolNames.set(toolUseId, toolName);
-              toolInputs.set(toolUseId, input);
-            }
+        if (decoded.kind === 'structured') {
+          structured = decoded.value;
+          continue;
+        }
 
-            let desc = toolName;
-            let detail = '';
+        if (decoded.kind === 'tool_result') {
+          if (decoded.tool === 'Bash') bashInFlight = false;
 
-            if (toolName === 'Read' && input.file_path) {
-              desc = `READ ${basename(input.file_path as string)}`;
-              detail = input.file_path as string;
-            } else if (toolName === 'Write' && input.file_path) {
-              desc = `WRITE ${basename(input.file_path as string)}`;
-              const content = (input.content as string) || '';
-              detail = `${input.file_path}\n--- content (${content.split('\n').length} lines) ---\n${content.slice(0, 500)}${content.length > 500 ? '\n...' : ''}`;
-            } else if (toolName === 'Edit' && input.file_path) {
-              desc = `EDIT ${basename(input.file_path as string)}`;
-              detail = `${input.file_path}\n- ${(input.old_string as string || '').slice(0, 100)}\n+ ${(input.new_string as string || '').slice(0, 100)}`;
-            } else if (toolName === 'Bash' && input.command) {
-              desc = `BASH ${(input.command as string).slice(0, 80)}`;
-              detail = input.command as string;
-            } else if (toolName === 'Glob' && input.pattern) {
-              desc = `GLOB ${input.pattern}`;
-            } else if (toolName === 'Grep' && input.pattern) {
-              desc = `GREP ${input.pattern}`;
-            } else if (toolName === 'WebSearch') {
-              desc = `SEARCH ${(input.query as string) || ''}`;
-            } else if (toolName === 'WebFetch' && input.url) {
-              desc = `FETCH ${input.url}`;
-            }
-
-            emit(agent, state.currentPhase, 'tool_call', desc, detail);
-            if (toolName === 'Bash') bashInFlight = true;
-          } else if (block.type === 'text') {
-            const text = (block.text as string || '').trim();
-            if (text) {
-              emit(agent, state.currentPhase, 'text', text);
-            }
+          if (decoded.summary) {
+            emit(agent, state.currentPhase, 'tool_result', decoded.summary);
           }
-        }
-      } else if (type === 'user') {
-        const msg = event.message as Record<string, unknown>;
-        const content = msg?.content as Array<Record<string, unknown>>;
-        if (content) {
-          for (const block of content) {
-            if (block.type !== 'tool_result') continue;
 
-            const toolUseId = block.tool_use_id as string;
-            const toolName = toolNames.get(toolUseId);
-            if (toolName === 'Bash') bashInFlight = false;
+          if (!decoded.isError) continue;
 
-            if (!block.is_error && toolName === 'StructuredOutput') {
-              structured = extractStructuredSignal(block.content) || structured;
-            }
-
-            // What the tool actually returned. Summarised rather than stored
-            // whole — see summarizeToolResult for why each tool gets a
-            // different shape of answer.
-            if (!block.is_error && toolName && toolName !== 'StructuredOutput') {
-              const summary = summarizeToolResult(toolName, block.content);
-              if (summary) emit(agent, state.currentPhase, 'tool_result', summary);
-            }
-
-            if (block.is_error) {
-              const errorText = typeof block.content === 'string'
-                ? block.content
-                : JSON.stringify(block.content);
-              if (errorText) {
-                emit(agent, state.currentPhase, 'permission_denied', errorText);
-              }
-
-              const strictBashAsk =
-                state.securityMode === 'strict' &&
-                (agent === id('coder') || agent === id('tester')) &&
-                toolName === 'Bash';
-
-              if (strictBashAsk && !settled) {
-                permissionDenied = {
-                  toolName: 'Bash',
-                  toolInput: toolInputs.get(toolUseId) || {},
-                };
-                interruptedForApproval = true;
-                settled = true;
-                clearActiveTurn(agent);
-                resolve({
-                  result: '',
-                  sessionId: currentSessionId,
-                  structured,
-                  permissionDenied,
-                  interruptedForApproval,
-                  stalled,
-                  fallbackToHost: false,
-                });
-                clearInterval(stallWatcher);
-                child.kill('SIGTERM');
-                return;
-              }
-            }
+          if (decoded.errorText) {
+            emit(agent, state.currentPhase, 'permission_denied', decoded.errorText);
           }
-        }
-      } else if (type === 'result') {
-        lastResult = event;
-        structured = extractStructuredSignal(event.structured_output, event.result) || structured;
-        if (typeof event.result === 'string') {
-          noteDiagnostic(event.result);
+
+          const strictBashAsk =
+            state.securityMode === 'strict' &&
+            (agent === id('coder') || agent === id('tester')) &&
+            decoded.tool === 'Bash';
+
+          if (strictBashAsk && !settled) {
+            permissionDenied = {
+              toolName: 'Bash',
+              toolInput: toolInputs.get(decoded.callId) || {},
+            };
+            interruptedForApproval = true;
+            settled = true;
+            clearActiveTurn(agent);
+            resolve({
+              result: '',
+              sessionId: currentSessionId,
+              structured,
+              permissionDenied,
+              interruptedForApproval,
+              stalled,
+              fallbackToHost: false,
+            });
+            clearInterval(stallWatcher);
+            rl.close();
+            child.kill('SIGTERM');
+            return;
+          }
+
+          continue;
         }
 
-        recordUsage(state.usage, usageFromResultEvent(event), {
-          memberId: agent,
-          model: runnerOpts.model,
-        });
-        noteBudget(member);
-        flush();
+        if (decoded.kind === 'result') {
+          lastResult = decoded.raw;
+          if (decoded.text) noteDiagnostic(decoded.text);
 
-        const denials = (event.permission_denials as Array<Record<string, unknown>> | undefined) || [];
-        const bashDenial = denials.find((denial) => denial.tool_name === 'Bash');
-        if (bashDenial) {
-          permissionDenied = {
-            toolName: 'Bash',
-            toolInput: (bashDenial.tool_input as Record<string, unknown>) || {},
-          };
+          recordUsage(state.usage, usageFromResultEvent(decoded.raw), {
+            memberId: agent,
+            model: runnerOpts.model,
+          });
+          noteBudget(member);
+          flush();
+
+          const bashDenial = decoded.denials.find((denial) => denial.toolName === 'Bash');
+          if (bashDenial) {
+            permissionDenied = { toolName: 'Bash', toolInput: bashDenial.toolInput };
+          }
         }
       }
     });

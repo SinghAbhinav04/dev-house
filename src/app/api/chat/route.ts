@@ -1,5 +1,5 @@
 import { readFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
-import { join, resolve, basename } from 'path';
+import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { NextRequest, NextResponse } from 'next/server';
@@ -25,7 +25,7 @@ import {
   type SecurityMode,
 } from '@/lib/pipeline-control';
 import { parseSupervisorIntent } from '@/lib/supervisor-intents';
-import { summarizeToolResult } from '@/lib/events';
+import { createClaudeDecoder } from '@/lib/cli/decoder';
 
 import { getMember, readRoster } from '@/lib/team/roster';
 import { resolveSlot } from '@/lib/team/slots';
@@ -226,8 +226,7 @@ function streamClaude(
   sessionId: string,
 ): Promise<NextResponse> {
   return new Promise<NextResponse>((resolveResponse) => {
-    /** tool_use id → tool name, so results can be summarised per tool. */
-    const toolNames = new Map<string, string>();
+    const decoder = createClaudeDecoder();
     const child = runner.spawn(opts);
     const canFallbackToHost = child.backend === 'docker' && runner.supportsHostFallback(opts);
 
@@ -260,87 +259,51 @@ function streamClaude(
     rl.on('line', (line) => {
       if (!line.trim()) return;
       noteDiagnostic(line);
-      let event: Record<string, unknown>;
-      try { event = JSON.parse(line); } catch { return; }
-
-      const type = event.type as string;
-
-      if (type === 'system') {
-        const streamedSessionId = (event.session_id as string) || '';
-        if (streamedSessionId) {
-          newSessionId = streamedSessionId;
+      for (const decoded of decoder.push(line)) {
+        if (decoded.kind === 'session') {
+          newSessionId = decoded.sessionId;
           try {
             const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
             if (!s.sessions) s.sessions = {};
-            s.sessions[agent] = streamedSessionId;
+            s.sessions[agent] = decoded.sessionId;
+            writeJsonAtomic(eventsFile, s);
+          } catch {}
+          continue;
+        }
+
+        if (decoded.kind === 'tool_call') {
+          appendEvent(eventsFile, agent, 'tool_call', decoded.description, decoded.detail);
+          continue;
+        }
+
+        if (decoded.kind === 'text') {
+          appendEvent(eventsFile, agent, 'text', decoded.text);
+          continue;
+        }
+
+        // Tool results, so a terminal view has something between a call and
+        // the next message rather than a silent gap.
+        if (decoded.kind === 'tool_result') {
+          if (decoded.summary) appendEvent(eventsFile, agent, 'tool_result', decoded.summary);
+          continue;
+        }
+
+        if (decoded.kind === 'result') {
+          newSessionId = decoded.sessionId || sessionId;
+          lastResultText = decoded.text;
+          try {
+            const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
+            if (!s.sessions) s.sessions = {};
+            s.sessions[agent] = newSessionId;
+            // Attribute the spend to the member that ran, not just the total.
+            s.usage = normalizeUsage(s.usage);
+            recordUsage(s.usage as UsageBreakdown, usageFromResultEvent(decoded.raw), {
+              memberId: agent,
+              model: opts.model,
+            });
             writeJsonAtomic(eventsFile, s);
           } catch {}
         }
-      }
-
-      if (type === 'assistant') {
-        const msg = event.message as Record<string, unknown>;
-        const content = msg?.content as Array<Record<string, unknown>>;
-        if (!content) return;
-
-        for (const block of content) {
-          if (block.type === 'tool_use') {
-            const toolName = block.name as string;
-            const input = block.input as Record<string, unknown>;
-            const toolUseId = block.id as string;
-            if (toolUseId) toolNames.set(toolUseId, toolName);
-
-            let desc = toolName;
-            let detail = '';
-            if (toolName === 'Read' && input.file_path) {
-              desc = `READ ${basename(input.file_path as string)}`;
-              detail = input.file_path as string;
-            } else if (toolName === 'Write' && input.file_path) {
-              desc = `WRITE ${basename(input.file_path as string)}`;
-              detail = input.file_path as string;
-            } else if (toolName === 'Edit' && input.file_path) {
-              desc = `EDIT ${basename(input.file_path as string)}`;
-              detail = input.file_path as string;
-            } else if (toolName === 'Bash' && input.command) {
-              desc = `BASH ${(input.command as string).slice(0, 80)}`;
-              detail = input.command as string;
-            }
-
-            appendEvent(eventsFile, agent, 'tool_call', desc, detail);
-          } else if (block.type === 'text') {
-            const text = ((block.text as string) || '').trim();
-            if (text) appendEvent(eventsFile, agent, 'text', text);
-          }
-        }
-      } else if (type === 'user') {
-        // Tool results, so a terminal view has something between a call and
-        // the next message rather than a silent gap.
-        const msg = event.message as Record<string, unknown>;
-        const content = msg?.content as Array<Record<string, unknown>>;
-        for (const block of content || []) {
-          if (block.type !== 'tool_result' || block.is_error) continue;
-
-          const toolName = toolNames.get(block.tool_use_id as string);
-          if (!toolName || toolName === 'StructuredOutput') continue;
-
-          const summary = summarizeToolResult(toolName, block.content);
-          if (summary) appendEvent(eventsFile, agent, 'tool_result', summary);
-        }
-      } else if (type === 'result') {
-        newSessionId = (event.session_id as string) || sessionId;
-        lastResultText = typeof event.result === 'string' ? event.result : '';
-        try {
-          const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
-          if (!s.sessions) s.sessions = {};
-          s.sessions[agent] = newSessionId;
-          // Attribute the spend to the member that ran, not just the total.
-          s.usage = normalizeUsage(s.usage);
-          recordUsage(s.usage as UsageBreakdown, usageFromResultEvent(event), {
-            memberId: agent,
-            model: opts.model,
-          });
-          writeJsonAtomic(eventsFile, s);
-        } catch {}
       }
     });
 

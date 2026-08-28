@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { createRunner } from '../../../../pipeline/runner.ts';
+import { createClaudeDecoder } from '@/lib/cli/decoder';
 import { readRoster } from '@/lib/team/roster';
 import { buildRunPlan } from '@/lib/team/slots';
 import { MAX_TEAM_SIZE, OFFICE_FULL_MESSAGE } from '@/lib/team/types';
@@ -73,14 +74,14 @@ function draftProposal(requirements: string, systemPrompt: string, model: string
       fn();
     };
 
+    // Only the terminal event matters here, but it goes through the same
+    // decoder as every other read of the stream so there is one place that
+    // knows the wire format.
+    const decoder = createClaudeDecoder();
     const rl = createInterface({ input: child.stdout });
     rl.on('line', (line) => {
-      if (!line.trim()) return;
-      try {
-        const event = JSON.parse(line) as Record<string, unknown>;
-        if (event.type === 'result') lastResult = event;
-      } catch {
-        // Non-JSON diagnostics are noise on this path.
+      for (const decoded of decoder.push(line)) {
+        if (decoded.kind === 'result') lastResult = decoded.raw;
       }
     });
 

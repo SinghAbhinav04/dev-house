@@ -260,8 +260,53 @@ function permissionArgs(opts: RunnerOptions): string[] {
   return ['--permission-mode', mode];
 }
 
-export function buildClaudeArgs(opts: RunnerOptions): string[] {
-  if (!hasValue(opts.roleFile) && !hasValue(opts.systemPrompt)) {
+/** Container-side plugin mount point for the Nth attached plugin directory. */
+export function containerPluginDir(index: number): string {
+  return `/opt/pipeline/plugins/${index}`;
+}
+
+/** Container-side mount point for the member's role file. */
+export const CONTAINER_ROLE_FILE = '/opt/pipeline/role.md';
+
+/**
+ * Where the files a spawn refers to actually live, from the CLI's point of view.
+ *
+ * The host runner sees real paths; the docker runner sees the mount points it
+ * bound them to. Isolating that difference here is what lets one arg builder
+ * serve both — the flag vocabulary used to be written out twice, once per
+ * backend, so a new flag had to be added in two places and a mistake in either
+ * copy only showed up on one of them.
+ */
+export interface PathLayout {
+  roleFile?: string;
+  pluginDirs: string[];
+}
+
+/** What the host sees: the paths exactly as they are on disk. */
+export function hostLayout(opts: RunnerOptions): PathLayout {
+  return {
+    roleFile: opts.roleFile,
+    pluginDirs: [...(opts.pluginDirs || [])],
+  };
+}
+
+/** What the container sees: the read-only mount points bound in buildDockerArgs. */
+export function containerLayout(opts: RunnerOptions): PathLayout {
+  return {
+    roleFile: hasValue(opts.roleFile) ? CONTAINER_ROLE_FILE : undefined,
+    pluginDirs: (opts.pluginDirs || []).map((_dir, index) => containerPluginDir(index)),
+  };
+}
+
+/**
+ * The argv for one Claude Code turn, against a given view of the filesystem.
+ *
+ * Every flag here is Claude Code's own vocabulary. When a second CLI lands this
+ * becomes one implementation of an adapter rather than the only way to build a
+ * command line.
+ */
+export function buildArgs(opts: RunnerOptions, layout: PathLayout): string[] {
+  if (!hasValue(layout.roleFile) && !hasValue(opts.systemPrompt)) {
     throw new Error('RunnerOptions requires either roleFile or systemPrompt');
   }
 
@@ -273,8 +318,8 @@ export function buildClaudeArgs(opts: RunnerOptions): string[] {
     '--verbose',
   ];
 
-  if (hasValue(opts.roleFile)) {
-    args.push('--system-prompt-file', opts.roleFile);
+  if (hasValue(layout.roleFile)) {
+    args.push('--system-prompt-file', layout.roleFile);
   } else if (hasValue(opts.systemPrompt)) {
     args.push('--system-prompt', opts.systemPrompt);
   }
@@ -286,7 +331,7 @@ export function buildClaudeArgs(opts: RunnerOptions): string[] {
   // Each member's skills are packaged as a session-scoped plugin. This is the
   // only mechanism that isolates skills per member — every member in a run
   // shares one working directory, so <cwd>/.claude/skills could not.
-  for (const dir of opts.pluginDirs || []) {
+  for (const dir of layout.pluginDirs) {
     args.push('--plugin-dir', dir);
   }
 
@@ -301,45 +346,14 @@ export function buildClaudeArgs(opts: RunnerOptions): string[] {
   return args;
 }
 
-/** Container-side plugin mount point for the Nth attached plugin directory. */
-export function containerPluginDir(index: number): string {
-  return `/opt/pipeline/plugins/${index}`;
+/** The argv for a turn running directly on the host. */
+export function buildClaudeArgs(opts: RunnerOptions): string[] {
+  return buildArgs(opts, hostLayout(opts));
 }
 
+/** The argv for a turn running inside the agent container. */
 function buildContainerClaudeArgs(opts: RunnerOptions): string[] {
-  const args: string[] = [
-    '-p', opts.prompt,
-    ...permissionArgs(opts),
-    '--model', opts.model,
-    '--output-format', 'stream-json',
-    '--verbose',
-  ];
-
-  if (hasValue(opts.roleFile)) {
-    args.push('--system-prompt-file', '/opt/pipeline/role.md');
-  } else if (hasValue(opts.systemPrompt)) {
-    args.push('--system-prompt', opts.systemPrompt);
-  } else {
-    throw new Error('RunnerOptions requires either roleFile or systemPrompt');
-  }
-
-  if (hasValue(opts.effort)) {
-    args.push('--effort', opts.effort);
-  }
-
-  (opts.pluginDirs || []).forEach((_dir, index) => {
-    args.push('--plugin-dir', containerPluginDir(index));
-  });
-
-  if (hasValue(opts.resume)) {
-    args.push('--resume', opts.resume);
-  }
-
-  if (opts.jsonSchema) {
-    args.push('--json-schema', JSON.stringify(opts.jsonSchema));
-  }
-
-  return args;
+  return buildArgs(opts, containerLayout(opts));
 }
 
 export function buildRunnerEnv(opts: RunnerOptions): NodeJS.ProcessEnv {
@@ -410,7 +424,7 @@ export function buildDockerArgs(
   }
 
   if (hasValue(opts.roleFile)) {
-    dockerArgs.push('-v', `${opts.roleFile}:/opt/pipeline/role.md:ro`);
+    dockerArgs.push('-v', `${opts.roleFile}:${CONTAINER_ROLE_FILE}:ro`);
   }
 
   for (const file of opts.templateFiles || []) {

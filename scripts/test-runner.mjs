@@ -5,10 +5,15 @@ import { tmpdir } from 'node:os';
 
 import {
   AutoRunner,
+  CONTAINER_ROLE_FILE,
   DockerRunner,
   HostRunner,
+  buildArgs,
   buildClaudeArgs,
   buildDockerArgs,
+  containerLayout,
+  containerPluginDir,
+  hostLayout,
   buildRunnerEnv,
   createCredentialBootstrap,
   createRunner,
@@ -278,6 +283,62 @@ assert.match(
   grounded.isolationStatus(isolated).reason,
   /Docker/,
   'the caller is told why, so the pause can explain itself',
+);
+
+// ── Host and container argv differ only in paths ─────────────────────
+//
+// The flag vocabulary used to be written out twice, once per backend, so a
+// flag added to one copy silently did not exist in the other. Now both go
+// through buildArgs and differ only in the PathLayout handed to it. This
+// asserts exactly that: replace the container's mount points with the host's
+// real paths and the two command lines must be identical.
+
+const layoutOpts = {
+  prompt: 'do the thing',
+  projectDir: '/tmp/project',
+  model: 'sonnet',
+  roleFile: '/home/me/.hackeroom/members/pat/role.md',
+  pluginDirs: ['/repo/templates/team-plugin', '/home/me/.hackeroom/members/pat/plugin'],
+  resume: 'sess-9',
+  effort: 'high',
+  jsonSchema: { type: 'object' },
+};
+
+const onHost = buildArgs(layoutOpts, hostLayout(layoutOpts));
+const inContainer = buildArgs(layoutOpts, containerLayout(layoutOpts));
+
+const containerToHost = new Map([
+  [CONTAINER_ROLE_FILE, layoutOpts.roleFile],
+  ...layoutOpts.pluginDirs.map((dir, index) => [containerPluginDir(index), dir]),
+]);
+
+assert.deepEqual(
+  inContainer.map((arg) => containerToHost.get(arg) ?? arg),
+  onHost,
+  'the two backends build the same command line, differing only in where the files are mounted',
+);
+
+assert.ok(
+  inContainer.includes(CONTAINER_ROLE_FILE),
+  'the container is told the mount point, not the host path it would not be able to read',
+);
+assert.ok(
+  !inContainer.includes(layoutOpts.roleFile),
+  'and never the host path',
+);
+
+assert.throws(
+  () => buildArgs({ prompt: 'x', projectDir: '/tmp/p', model: 'sonnet' }, { pluginDirs: [] }),
+  /roleFile or systemPrompt/,
+  'a turn with no system prompt at all is a programming error, on either backend',
+);
+
+assert.ok(
+  buildArgs(
+    { prompt: 'x', projectDir: '/tmp/p', model: 'sonnet', systemPrompt: 'inline' },
+    containerLayout({ prompt: 'x', projectDir: '/tmp/p', model: 'sonnet', systemPrompt: 'inline' }),
+  ).includes('--system-prompt'),
+  'an inline system prompt needs no mount, so it survives the container layout',
 );
 
 console.log('runner checks passed');
