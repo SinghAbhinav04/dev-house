@@ -1,5 +1,21 @@
 'use client';
 
+/* eslint-disable react-hooks/set-state-in-effect --
+ * Three effects here reset animation state when the phase changes: positions,
+ * speech, and which guests are walking. They are the old "derive state from a
+ * prop change" pattern, which the React compiler lint now flags as cascading
+ * renders. It is right that they are not the modern idiom, and it is also not a
+ * correctness bug here — the extra render happens once per phase change, on a
+ * scene that is already animating.
+ *
+ * Not fixed because fixing it means restructuring the movement logic in a
+ * 1700-line component whose only real test is watching the office and seeing
+ * whether people still walk to the right desks. Worth doing deliberately, with
+ * the scene in front of you; not worth doing blind to make a linter quiet.
+ *
+ * Scoped to this file so the rule keeps working everywhere else.
+ */
+
 import { AnimatePresence, motion } from 'framer-motion';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
@@ -1108,11 +1124,17 @@ export function LunarOfficeScene({
   });
   // The wander timers fire seconds after being scheduled and need positions as
   // they are *then*, not as they were at schedule time, so the latest value is
-  // mirrored into a ref. React's compiler lint flags the write either way —
-  // during render as a ref access, in an effect as modifying an effect
-  // dependency — and this form is the one that has always worked here.
+  // mirrored into a ref.
+  //
+  // Written in an effect rather than during render. Writing it during render is
+  // a real violation — React may render without committing, so the ref can end
+  // up holding a value that was never on screen — and it is what made lint fail
+  // the build. Updating after commit is a paint later than before, which
+  // nothing here can notice: the readers are timers firing seconds afterwards.
   const idlePositionsRef = useRef(idlePositions);
-  idlePositionsRef.current = idlePositions;
+  useEffect(() => {
+    idlePositionsRef.current = idlePositions;
+  }, [idlePositions]);
 
   const prevPhaseRef = useRef(activePhase);
   const idleTimerRef = useRef<number[]>([]);

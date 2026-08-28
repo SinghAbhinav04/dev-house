@@ -5,6 +5,10 @@
   "author": "Abhinav Singh <heysinghabhinav@gmail.com>",
   "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
+  "packageManager": "pnpm@11.5.3",
+  "engines": {
+    "node": ">=22"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/SinghAbhinav04/dev-house.git"

@@ -1,3 +1,9 @@
+# Not a monorepo, but this file has to declare `packages` anyway: pnpm treats
+# its presence as "this is a workspace" and older versions refuse to run
+# without it, which is what broke CI while working fine locally on a newer one.
+packages:
+  - '.'
+
 allowBuilds:
   sharp: false
   unrs-resolver: false
