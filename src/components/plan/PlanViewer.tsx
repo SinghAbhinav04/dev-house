@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 
+import { MarkdownText } from '@/components/shared/MarkdownText';
+
 /**
  * The plan, read rather than scrolled past.
  *
@@ -123,6 +125,61 @@ export function PlanMarkdown({ content }: { content: string }) {
         {content}
       </ReactMarkdown>
     </div>
+  );
+}
+
+/**
+ * Long enough that inlining it costs you the rest of the feed.
+ *
+ * Chosen by what it does to the screen rather than by any property of the
+ * text: past roughly this size a message stops being something you read in
+ * passing and becomes something you scroll, and everything above it is gone.
+ */
+const LONG_FORM_LINES = 14;
+const LONG_FORM_CHARS = 900;
+
+export function isLongForm(event: { type?: string; text?: string }): boolean {
+  if (event.type !== 'text' || !event.text) return false;
+  return event.text.split('\n').length > LONG_FORM_LINES || event.text.length > LONG_FORM_CHARS;
+}
+
+/** The first heading or sentence, so the card says what it is holding. */
+export function documentTitle(text: string): string {
+  const heading = text.split('\n').find((line) => /^#{1,3}\s+\S/.test(line.trim()));
+  if (heading) return heading.replace(/^#+\s*/, '').replace(/[*_`]/g, '').trim().slice(0, 80);
+
+  const first = text.split('\n').find((line) => line.trim().length > 0)?.trim() ?? 'Long answer';
+  const sentence = first.split(/(?<=[.:!?])\s/)[0];
+  return (sentence.length > 80 ? `${sentence.slice(0, 77)}…` : sentence).replace(/[*_`#]/g, '');
+}
+
+/**
+ * One feed message, wherever a feed is drawn.
+ *
+ * A component rather than a snippet because there are four feeds — the office
+ * sidebar, the live feed, the expanded-member modal and the squad view — and
+ * the first version of this fix only reached one of them. Anything that has to
+ * be true in every feed belongs somewhere there is only one of.
+ */
+export function FeedMessage({
+  event,
+  author,
+  onOpen,
+}: {
+  event: { type?: string; text?: string };
+  author: string;
+  onOpen: (text: string) => void;
+}) {
+  const text = event.text ?? '';
+
+  if (!isLongForm(event)) return <MarkdownText>{text}</MarkdownText>;
+
+  return (
+    <ArtifactCard
+      title={documentTitle(text)}
+      subtitle={`${text.split('\n').length} lines · ${author}`}
+      onOpen={() => onOpen(text)}
+    />
   );
 }
 

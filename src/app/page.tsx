@@ -4,8 +4,7 @@ import Link from 'next/link';
 import { useState, useRef, useEffect } from 'react';
 import { Badge } from '@/components/shared/Badge';
 import { AutoGrowTextarea } from '@/components/shared/AutoGrowTextarea';
-import { MarkdownText } from '@/components/shared/MarkdownText';
-import { ArtifactCard, PlanMarkdown } from '@/components/plan/PlanViewer';
+import { FeedMessage, PlanMarkdown } from '@/components/plan/PlanViewer';
 import { LunarOfficeScene, type SeatMap } from '@/components/mission/LunarOfficeScene';
 import { SecurityAuditPanel } from '@/components/agents/SecurityAuditPanel';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
@@ -38,31 +37,6 @@ const PHASE_PROGRESS: Record<string, number> = {
 const MODEL_OPTIONS = MODEL_ALIASES.map((value) => ({ value, label: value }));
 
 /** Avatar text. Member ids are arbitrary length, so never render one raw. */
-/**
- * Long enough that inlining it costs you the rest of the feed.
- *
- * Chosen by what it does to the screen rather than by any property of the
- * text: past roughly this size a message stops being something you read in
- * passing and becomes something you scroll, and everything above it is gone.
- */
-const LONG_FORM_LINES = 14;
-const LONG_FORM_CHARS = 900;
-
-function isLongForm(event: { type?: string; text?: string }): boolean {
-  if (event.type !== 'text' || !event.text) return false;
-  return event.text.split('\n').length > LONG_FORM_LINES || event.text.length > LONG_FORM_CHARS;
-}
-
-/** The first heading or sentence, so the card says what it is holding. */
-function documentTitle(text: string): string {
-  const heading = text.split('\n').find((line) => /^#{1,3}\s+\S/.test(line.trim()));
-  if (heading) return heading.replace(/^#+\s*/, '').replace(/[*_`]/g, '').trim().slice(0, 80);
-
-  const first = text.split('\n').find((line) => line.trim().length > 0)?.trim() ?? 'Long answer';
-  const sentence = first.split(/(?<=[.:!?])\s/)[0];
-  return (sentence.length > 80 ? `${sentence.slice(0, 77)}…` : sentence).replace(/[*_`#]/g, '');
-}
-
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
@@ -243,6 +217,17 @@ export default function PipelinePage() {
     setSendingAgents(prev => { const n = new Set(prev); n.delete(supervisorId); return n; });
   }
 
+  /**
+   * Open a long message in the document viewer.
+   *
+   * Shared by every feed, so a card behaves the same wherever it appears
+   * rather than each feed inventing its own way to show the thing.
+   */
+  function openDocument(text: string) {
+    setPlanContent(text);
+    setShowPlan(true);
+  }
+
   async function handleStartPipeline() {
     completionNotifiedRef.current = false;
     setPipelineStarted(true);
@@ -408,8 +393,17 @@ export default function PipelinePage() {
 
   return (
     <div className="p-4 space-y-4">
-      {/* Hero: Animation + Feed (65%) + Dashboard (35%) */}
-      <div className="grid gap-4" style={{ gridTemplateColumns: '65% 1fr' }}>
+      {/* Hero: Animation + Feed (65%) + Dashboard (35%)
+          The height is pinned to the viewport on purpose. Without it the row
+          grows to fit whichever column is tallest, the feed's `minHeight: 100%`
+          resolves against that grown row, and the two chase each other — so a
+          long run pushed the feed past the bottom of the page and you scrolled
+          the document instead of the feed. Both columns now scroll inside
+          themselves. */}
+      <div
+        className="grid gap-4"
+        style={{ gridTemplateColumns: '65% 1fr', height: 'calc(100vh - 2rem)', minHeight: '32rem' }}
+      >
         {/* Office Scene + Live Feed below it — height driven by dashboard */}
         <div className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface-raised" style={{ height: 0, minHeight: '100%' }}>
           <div className="p-2">
@@ -460,15 +454,15 @@ export default function PipelinePage() {
                     e.type === 'tool_call' ? 'text-[var(--ink-faint)]' :
                     e.type === 'user_msg' ? 'text-accent-cool' :
                     e.type === 'text' ? 'text-ink-soft' : 'text-[var(--ink-faint)]'
-                  }`}><MarkdownText>{e.text}</MarkdownText></div>
+                  }`}><FeedMessage event={e} author={memberName(e.agent)} onOpen={openDocument} /></div>
                 </div>
               ))}
             </div>
           </div>
         </div>
 
-        {/* Dashboard */}
-        <div className="flex flex-col gap-4 rounded-xl border border-line bg-surface-raised p-5">
+        {/* Dashboard — scrolls inside itself, like the feed beside it. */}
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto rounded-xl border border-line bg-surface-raised p-5">
           {/* Title + Mode Toggle */}
           <div>
             <div className="flex items-start justify-between gap-3">
@@ -989,22 +983,7 @@ export default function PipelinePage() {
                 <span className="mr-1.5 text-[9px] text-ink-faint">
                   {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </span>
-                {/* A long answer is a document, not a chat message. Inline, it
-                    pushes everything else off the screen and cannot be scrolled
-                    back to; as a card it stays one line and opens rendered,
-                    with any mermaid actually drawn. */}
-                {isLongForm(e) ? (
-                  <ArtifactCard
-                    title={documentTitle(e.text)}
-                    subtitle={`${e.text.split('\n').length} lines · ${memberName(e.agent)}`}
-                    onOpen={() => {
-                      setPlanContent(e.text);
-                      setShowPlan(true);
-                    }}
-                  />
-                ) : (
-                  <MarkdownText>{e.text}</MarkdownText>
-                )}
+                <FeedMessage event={e} author={memberName(e.agent)} onOpen={openDocument} />
               </div>
             ))}
           </div>
@@ -1113,7 +1092,7 @@ export default function PipelinePage() {
                       <span className="mr-1.5 text-[9px] text-ink-faint">
                         {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </span>
-                      <MarkdownText>{e.text}</MarkdownText>
+                      <FeedMessage event={e} author={memberName(e.agent)} onOpen={openDocument} />
                     </div>
                   ))}
                 </div>
@@ -1203,7 +1182,7 @@ export default function PipelinePage() {
                   <span className="mr-2 text-[10px] text-[var(--ink-faint)]">
                     {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
-                  <MarkdownText>{e.text}</MarkdownText>
+                  <FeedMessage event={e} author={memberName(e.agent)} onOpen={openDocument} />
                 </div>
               ))}
             </div>
