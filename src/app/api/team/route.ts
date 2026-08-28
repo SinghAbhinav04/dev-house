@@ -18,6 +18,8 @@ import { buildRunPlan } from '@/lib/team/slots';
 import { readCurrentState } from '@/lib/state-source';
 import { billableTokens, emptyUsage } from '@/lib/team/usage';
 import { SLOT_IDS, type SlotId, type TeamMember } from '@/lib/team/types';
+import { isCliId } from '@/lib/cli/types';
+import { availableClis } from '@/lib/cli/registry';
 
 /**
  * Roster management for the /team page.
@@ -39,6 +41,18 @@ function readTeamView() {
   return {
     roster,
     templates: listRoleTemplates().map((t) => t.name),
+    // What this build can actually run, so the picker only ever offers engines
+    // with a working adapter and a gate that can be verified.
+    clis: availableClis().map((cli) => ({
+      id: cli.id,
+      label: cli.label,
+      models: cli.models,
+      defaultModel: cli.defaultModel,
+      efforts: cli.efforts,
+      permissionModes: cli.permissionModes,
+      // The UI explains this rather than silently ignoring the effort select.
+      effortInModelId: cli.id === 'antigravity',
+    })),
     plan: {
       ok: plan.ok,
       errors: plan.errors,
@@ -94,6 +108,8 @@ export async function POST(req: NextRequest) {
           name: body.name as string | undefined,
           title: body.title as string | undefined,
           slot: (body.slot as SlotId | null) ?? null,
+          // Undefined falls back to the team's engine, not to Claude Code.
+          cli: isCliId(body.cli) ? body.cli : undefined,
           model: body.model as string | undefined,
           permissionMode: body.permissionMode as TeamMember['permissionMode'] | undefined,
           effort: body.effort as TeamMember['effort'] | undefined,
@@ -106,7 +122,18 @@ export async function POST(req: NextRequest) {
       case 'update': {
         const patch = body.patch as Partial<TeamMember> | undefined;
         if (!patch) return NextResponse.json({ error: 'Nothing to update.' }, { status: 400 });
-        updateMember(readRoster(), id, patch);
+
+        const roster = readRoster();
+        const existing = roster.members.find((m) => m.id === id);
+
+        // Moving a member to another engine clears its model unless the same
+        // request set one. Model ids belong to a single CLI, so a leftover
+        // `sonnet` on an Antigravity member is not a stale preference — it is a
+        // name that engine will reject at spawn time, long after the mistake.
+        const movedCli = patch.cli !== undefined && existing && patch.cli !== existing.cli;
+        const applied = movedCli && patch.model === undefined ? { ...patch, model: '' } : patch;
+
+        updateMember(roster, id, applied);
         break;
       }
 
@@ -156,9 +183,19 @@ export async function POST(req: NextRequest) {
 
       case 'workflow': {
         const roster = readRoster();
+        // Changing the team's engine clears the team model with it: a model id
+        // belongs to one CLI, so carrying `sonnet` across to Antigravity would
+        // hand every member a name their engine cannot resolve.
+        const switchingCli = isCliId(body.teamCli) && body.teamCli !== roster.teamCli;
+
         writeRoster({
           ...roster,
-          ...(typeof body.teamModel === 'string' ? { teamModel: body.teamModel } : {}),
+          ...(isCliId(body.teamCli) ? { teamCli: body.teamCli } : {}),
+          ...(switchingCli
+            ? { teamModel: '' }
+            : typeof body.teamModel === 'string'
+              ? { teamModel: body.teamModel }
+              : {}),
           ...(typeof body.theme === 'string' ? { theme: body.theme } : {}),
           workflow: {
             ...roster.workflow,

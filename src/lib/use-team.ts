@@ -9,6 +9,7 @@ import type {
   SlotId,
   TeamMember,
 } from '@/lib/team/types';
+import type { CliId } from '@/lib/cli/types';
 import type { TokenUsage } from '@/lib/team/usage';
 
 export interface TeamMemberView extends TeamMember {
@@ -32,9 +33,28 @@ export interface TeamPlanView {
   filled: Record<string, string | null>;
 }
 
+/**
+ * An engine the picker may offer, as the server describes it.
+ *
+ * Sent from the server rather than imported here, so the UI can only offer
+ * engines this build actually has an adapter for — a half-finished adapter
+ * should not appear in a dropdown before its gate can be verified.
+ */
+export interface CliOption {
+  id: CliId;
+  label: string;
+  models: { id: string; label: string }[];
+  defaultModel: string;
+  efforts: Effort[];
+  permissionModes: MemberPermissionMode[];
+  /** True when the effort setting picks a variant of the model id. */
+  effortInModelId: boolean;
+}
+
 export interface TeamView {
   roster: Roster;
   templates: string[];
+  clis: CliOption[];
   plan: TeamPlanView;
   members: TeamMemberView[];
 }
@@ -42,6 +62,7 @@ export interface TeamView {
 const EMPTY: TeamView = {
   roster: {
     version: 2,
+    teamCli: 'claude',
     teamModel: 'sonnet',
     members: [],
     workflow: {
@@ -51,6 +72,7 @@ const EMPTY: TeamView = {
     },
   },
   templates: [],
+  clis: [],
   plan: { ok: false, errors: [], notes: [], phases: {}, runGoal: 'full-build', filled: {} },
   members: [],
 };
@@ -122,6 +144,7 @@ export function useTeam() {
       name?: string;
       title?: string;
       slot?: SlotId | null;
+      cli?: CliId;
       model?: string;
       permissionMode?: MemberPermissionMode;
       effort?: Effort;
@@ -138,6 +161,9 @@ export function useTeam() {
 
     setSlotEnabled: (slot: SlotId, enabled: boolean) => act({ action: 'slot', slot, enabled }),
     setTeamModel: (teamModel: string) => act({ action: 'workflow', teamModel }),
+    // No model is sent with it: the server clears the team model when the
+    // engine changes, since a model id belongs to exactly one CLI.
+    setTeamCli: (teamCli: CliId) => act({ action: 'workflow', teamCli }),
     setAutoTeam: (autoTeam: boolean) => act({ action: 'workflow', autoTeam }),
     setTheme: (theme: string) => act({ action: 'workflow', theme }),
     setRunGoal: (runGoal: string) => act({ action: 'workflow', runGoal }),

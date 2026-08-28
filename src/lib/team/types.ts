@@ -6,7 +6,7 @@
  * is answered by resolving a slot against the roster.
  */
 
-import type { CliId } from '../cli/types.ts';
+import { DEFAULT_CLI, type CliId } from '../cli/types.ts';
 
 // ── Slots ────────────────────────────────────────────────────────────
 
@@ -183,7 +183,15 @@ export interface WorkflowConfig {
 
 export interface Roster {
   version: 2;
-  /** Applied to any member whose own `model` is empty. */
+  /**
+   * The engine a new member gets by default.
+   *
+   * Also decides who `teamModel` applies to: model ids are CLI-specific, so a
+   * team default of `sonnet` cannot mean anything to a member running on
+   * something that has never heard of it.
+   */
+  teamCli: CliId;
+  /** Applied to any member on `teamCli` whose own `model` is empty. */
   teamModel: string;
   /** Active UI theme key, persisted alongside the roster. */
   theme?: string;
@@ -248,6 +256,7 @@ export const DEFAULT_WORKFLOW: WorkflowConfig = {
 
 export const EMPTY_ROSTER: Roster = {
   version: 2,
+  teamCli: DEFAULT_CLI,
   teamModel: DEFAULT_MODEL,
   members: [],
   workflow: DEFAULT_WORKFLOW,

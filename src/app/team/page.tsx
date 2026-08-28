@@ -3,13 +3,13 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
-import { useTeam, type TeamMemberView } from '@/lib/use-team';
+import { useTeam, type CliOption, type TeamMemberView } from '@/lib/use-team';
+import type { CliId } from '@/lib/cli/types';
 import type { TeamProposal } from '@/lib/team/proposal';
 import {
   EFFORT_LEVELS,
   MAX_TEAM_SIZE,
   OFFICE_FULL_MESSAGE,
-  MODEL_ALIASES,
   PERMISSION_MODES,
   SLOT_IDS,
   SLOT_LABELS,
@@ -46,6 +46,7 @@ export default function TeamPage() {
     addSkill,
     removeSkill,
     setSlotEnabled,
+    setTeamCli,
     setTeamModel,
     setAutoTeam,
     setTheme,
@@ -206,9 +207,12 @@ export default function TeamPage() {
           </section>
 
           <TeamSettings
+            teamCli={team.roster.teamCli}
             teamModel={team.roster.teamModel}
+            clis={team.clis ?? []}
             theme={team.roster.theme || 'warm'}
             autoTeam={team.roster.workflow.autoTeam === true}
+            onTeamCli={setTeamCli}
             onTeamModel={setTeamModel}
             onAutoTeam={setAutoTeam}
             onTheme={(value) => {
@@ -242,6 +246,8 @@ export default function TeamPage() {
           ) : creating ? (
             <CreateMemberForm
               templates={team.templates}
+              clis={team.clis ?? []}
+              teamCli={team.roster.teamCli}
               onCancel={() => setCreating(false)}
               onCreate={async (input) => {
                 const result = await createMember(input);
@@ -262,6 +268,7 @@ export default function TeamPage() {
             <MemberDetail
               key={selected.id}
               member={selected}
+              clis={team.clis ?? []}
               onUpdate={(patch) => updateMember(selected.id, patch)}
               onRole={(role) => setRole(selected.id, role)}
               onAddSkill={(name, description, body) => addSkill(selected.id, name, description, body)}
@@ -291,20 +298,27 @@ export default function TeamPage() {
 // ── Team-wide settings ─────────────────────────────────────────────
 
 function TeamSettings({
+  teamCli,
   teamModel,
+  clis,
   theme,
   autoTeam,
+  onTeamCli,
   onTeamModel,
   onAutoTeam,
   onTheme,
 }: {
+  teamCli: CliId;
   teamModel: string;
+  clis: CliOption[];
   theme: string;
   autoTeam: boolean;
+  onTeamCli: (value: CliId) => void;
   onTeamModel: (value: string) => void;
   onAutoTeam: (value: boolean) => void;
   onTheme: (value: string) => void;
 }) {
+  const cli = clis.find((option) => option.id === teamCli);
   return (
     <section className="space-y-3 rounded-xl border border-line bg-surface-raised p-3">
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-faint">Whole team</h2>
@@ -324,15 +338,33 @@ function TeamSettings({
         </label>
       </Field>
 
-      <Field label="Model" hint="Used by any member who has not picked their own.">
+      <Field label="Runs on" hint="What a new member gets unless you change it.">
+        <select
+          value={teamCli}
+          onChange={(e) => onTeamCli(e.target.value as CliId)}
+          className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+        >
+          {clis.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Model" hint="Used by members on this CLI who have not picked their own.">
         <select
           value={teamModel}
           onChange={(e) => onTeamModel(e.target.value)}
           className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
         >
-          {MODEL_ALIASES.map((model) => (
-            <option key={model} value={model}>
-              {model}
+          {/* Only this engine's models. A team default belongs to one CLI:
+              members on another fall back to their own engine's default
+              instead, because a model id means nothing outside the CLI that
+              defines it. */}
+          {(cli?.models ?? []).map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.label}
             </option>
           ))}
         </select>
@@ -440,16 +472,21 @@ function WorkflowSlots({
 
 function CreateMemberForm({
   templates,
+  clis,
+  teamCli,
   onCancel,
   onCreate,
 }: {
   templates: string[];
+  clis: CliOption[];
+  teamCli: CliId;
   onCancel: () => void;
   onCreate: (input: {
     id: string;
     name: string;
     title: string;
     slot: SlotId | null;
+    cli: CliId;
     model: string;
     role?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
@@ -457,8 +494,11 @@ function CreateMemberForm({
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
   const [slot, setSlot] = useState<SlotId | ''>('');
+  const [cli, setCli] = useState<CliId>(teamCli);
   const [model, setModel] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const cliOption = clis.find((option) => option.id === cli);
 
   // The id is derived from the name so there is one fewer thing to invent, but
   // it is shown because it becomes a directory name and the agent's identity.
@@ -506,6 +546,25 @@ function CreateMemberForm({
           </select>
         </Field>
 
+        <Field label="Runs on" hint="Which CLI their turns run in.">
+          <select
+            value={cli}
+            // Changing engine drops the model with it, for the same reason the
+            // member card does: a model id belongs to exactly one CLI.
+            onChange={(e) => {
+              setCli(e.target.value as CliId);
+              setModel('');
+            }}
+            className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+          >
+            {clis.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
         <Field label="Model" hint="Empty means the team default.">
           <select
             value={model}
@@ -513,9 +572,9 @@ function CreateMemberForm({
             className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
           >
             <option value="">Team default</option>
-            {MODEL_ALIASES.map((option) => (
-              <option key={option} value={option}>
-                {option}
+            {(cliOption?.models ?? []).map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
               </option>
             ))}
           </select>
@@ -534,7 +593,7 @@ function CreateMemberForm({
           disabled={!id || busy}
           onClick={async () => {
             setBusy(true);
-            await onCreate({ id, name: name.trim(), title: title.trim(), slot: slot || null, model });
+            await onCreate({ id, name: name.trim(), title: title.trim(), slot: slot || null, cli, model });
             setBusy(false);
           }}
           className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-surface-sunken transition-opacity hover:opacity-90 disabled:opacity-40"
@@ -557,6 +616,7 @@ function CreateMemberForm({
 
 function MemberDetail({
   member,
+  clis,
   onUpdate,
   onRole,
   onAddSkill,
@@ -564,12 +624,17 @@ function MemberDetail({
   onRemove,
 }: {
   member: TeamMemberView;
+  clis: CliOption[];
   onUpdate: (patch: Record<string, unknown>) => void;
   onRole: (role: string) => void;
   onAddSkill: (name: string, description: string, body: string) => Promise<{ ok: boolean }>;
   onRemoveSkill: (name: string) => void;
   onRemove: (deleteFiles: boolean) => void;
 }) {
+  // What this member's own engine offers. Missing only if a roster names a CLI
+  // this build cannot run, in which case the selects fall back to the built-in
+  // vocabulary rather than rendering empty.
+  const cli = clis.find((option) => option.id === member.cli);
   const [tab, setTab] = useState<'settings' | 'role' | 'skills'>('settings');
   const [role, setRoleDraft] = useState(member.role);
   const [roleDirty, setRoleDirty] = useState(false);
@@ -690,16 +755,43 @@ function MemberDetail({
               </select>
             </Field>
 
-            <Field label="Model" hint="Empty follows the team default.">
+            <Field label="Runs on" hint="The CLI this member's turns actually run in.">
+              <select
+                value={member.cli}
+                // Switching engine clears the model. Model ids belong to one
+                // CLI, so keeping `sonnet` on an Antigravity member is not a
+                // stale preference — it is a name that engine rejects at spawn
+                // time, long after the mistake was made. The server clears it
+                // too; doing it here keeps the form from showing a value it is
+                // about to lose.
+                onChange={(e) => onUpdate({ cli: e.target.value as CliId, model: '' })}
+                className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+              >
+                {clis.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field
+              label="Model"
+              hint={
+                cli?.effortInModelId
+                  ? 'This CLI builds the model id from the effort below.'
+                  : 'Empty follows the team default.'
+              }
+            >
               <select
                 value={member.model}
                 onChange={(e) => onUpdate({ model: e.target.value })}
                 className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
               >
                 <option value="">Team default</option>
-                {MODEL_ALIASES.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
+                {(cli?.models ?? []).map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
                   </option>
                 ))}
               </select>
@@ -711,7 +803,10 @@ function MemberDetail({
                 onChange={(e) => onUpdate({ permissionMode: e.target.value as MemberPermissionMode })}
                 className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
               >
-                {PERMISSION_MODES.map((mode) => (
+                {/* Only what this engine accepts. A mode it does not have is a
+                    validation error rather than something to clamp: clamping a
+                    permission mode can only ever loosen it. */}
+                {(cli?.permissionModes ?? PERMISSION_MODES).map((mode) => (
                   <option key={mode} value={mode}>
                     {mode}
                   </option>
@@ -719,13 +814,20 @@ function MemberDetail({
               </select>
             </Field>
 
-            <Field label="Effort" hint="Higher costs more and thinks longer.">
+            <Field
+              label="Effort"
+              hint={
+                cli?.effortInModelId
+                  ? 'Picks the variant of the model above.'
+                  : 'Higher costs more and thinks longer.'
+              }
+            >
               <select
                 value={member.effort}
                 onChange={(e) => onUpdate({ effort: e.target.value as Effort })}
                 className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
               >
-                {EFFORT_LEVELS.map((level) => (
+                {(cli?.efforts ?? EFFORT_LEVELS).map((level) => (
                   <option key={level} value={level}>
                     {level}
                   </option>

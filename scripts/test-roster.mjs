@@ -89,6 +89,41 @@ assert.equal(
   'and a non-string does not throw on the way',
 );
 
+assert.equal(normalizeRoster({}).teamCli, 'claude', 'so does the team-wide default');
+
+// ── The team model only applies to the team's own engine ─────────────
+//
+// Model ids belong to exactly one CLI. `sonnet` means nothing to Antigravity
+// and `gemini-3.7-flash` means nothing to Claude Code, so a blanket fallback
+// on a mixed team would hand half the roster a name their engine cannot
+// resolve — and it would only surface at spawn time, long after the choice.
+
+const mixed = normalizeRoster({
+  teamCli: 'claude',
+  teamModel: 'opus',
+  members: [
+    { id: 'pat', cli: 'claude' },
+    { id: 'gem', cli: 'antigravity' },
+    { id: 'picky', cli: 'antigravity', model: 'gemini-3.1-pro' },
+  ],
+});
+
+const member = (id) => mixed.members.find((m) => m.id === id);
+
+assert.equal(resolveModel(mixed, member('pat')), 'opus', 'a member on the team engine takes the team model');
+assert.equal(
+  resolveModel(mixed, member('gem')),
+  'gemini-3.7-flash',
+  'a member on another engine falls back to THAT engine\'s default, not to the team model',
+);
+assert.equal(resolveModel(mixed, member('picky')), 'gemini-3.1-pro', 'an explicit choice always wins');
+
+assert.notEqual(
+  resolveModel(mixed, member('gem')),
+  'opus',
+  'the specific bug: an Antigravity member must never be handed a Claude alias',
+);
+
 // ── clampCapabilities ────────────────────────────────────────────────
 
 assert.equal(

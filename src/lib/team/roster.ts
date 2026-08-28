@@ -44,7 +44,8 @@ import {
   type TeamMember,
   type WorkflowConfig,
 } from './types.ts';
-import { DEFAULT_CLI, isCliId } from '../cli/types.ts';
+import { DEFAULT_CLI, isCliId, type CliId } from '../cli/types.ts';
+import { resolveCli } from '../cli/registry.ts';
 
 export const ROSTER_FILE = 'team.json';
 export const ROLE_FILENAME = 'role.md';
@@ -231,6 +232,8 @@ export function normalizeRoster(raw: unknown): Roster {
 
   return {
     version: 2,
+    // Absent on every roster written before members could pick an engine.
+    teamCli: isCliId(input.teamCli) ? input.teamCli : DEFAULT_CLI,
     teamModel: str(input.teamModel) || DEFAULT_MODEL,
     ...(typeof input.theme === 'string' ? { theme: input.theme } : {}),
     members,
@@ -265,11 +268,22 @@ export function getMember(roster: Roster, id: string): TeamMember | null {
 }
 
 /**
- * The model a member actually runs on: its own choice, else the team default,
- * else the built-in default. Aliases are passed through to the CLI untouched.
+ * The model a member actually runs on: its own choice, else a default.
+ *
+ * The team default only applies to members on the team's own engine. Model ids
+ * are CLI-specific — `sonnet` means nothing to Antigravity and
+ * `gemini-3.7-flash` means nothing to Claude Code — so on a mixed team a
+ * blanket fallback would hand half the roster a name their engine cannot
+ * resolve. A member on some other engine falls back to that engine's default
+ * instead. Aliases are passed to the CLI untouched either way.
  */
 export function resolveModel(roster: Roster, member: TeamMember): string {
-  return member.model || roster.teamModel || DEFAULT_MODEL;
+  if (member.model) return member.model;
+
+  const cli = resolveCli(member.cli);
+  if (member.cli === roster.teamCli) return roster.teamModel || cli.defaultModel;
+
+  return cli.defaultModel || DEFAULT_MODEL;
 }
 
 export function memberDisplayName(member: TeamMember): string {
@@ -287,6 +301,8 @@ export function createMember(
     name?: string;
     title?: string;
     slot?: SlotId | null;
+    /** Defaults to the team's engine rather than to Claude Code. */
+    cli?: CliId;
     model?: string;
     permissionMode?: MemberPermissionMode;
     effort?: Effort;
@@ -314,6 +330,10 @@ export function createMember(
       ...input,
       id,
       slot,
+      // The team's engine, not the built-in default: on a team already running
+      // on something else, a new member joining on Claude Code would be a
+      // surprise rather than a choice.
+      cli: input.cli ?? roster.teamCli,
       capabilities: { ...defaultCapabilitiesForSlot(slot), ...(input.capabilities ?? {}) },
     },
     roster.members.length
