@@ -326,6 +326,21 @@ function streamClaude(
       // Anything the decoder was still holding back.
       for (const decoded of decoder.finish()) handleEvent(decoded);
 
+      // Some engines never put the reply in the stream, so it has to be
+      // fetched once the process is gone. Without this a chat turn on one of
+      // them answers with silence: the tool calls arrive, the tokens are
+      // counted, and the member appears to have said nothing at all.
+      const cli = resolveCli(opts.cli);
+      if (!lastResultText && cli.fetchReplyText && newSessionId) {
+        try {
+          lastResultText = cli.fetchReplyText(newSessionId, opts.projectDir);
+          if (lastResultText) appendEvent(eventsFile, agent, 'text', lastResultText);
+        } catch {
+          // A reply that cannot be fetched stays empty rather than failing the
+          // turn; the caller already handles an empty answer.
+        }
+      }
+
       if (canFallbackToHost && isRecoverableDockerAuthFailure(`${diagnosticTail}\n${stderr}\n${lastResultText}`)) {
         try {
           const s = JSON.parse(readFileSync(eventsFile, 'utf8'));

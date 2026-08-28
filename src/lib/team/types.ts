@@ -62,6 +62,19 @@ export type ModelAlias = (typeof MODEL_ALIASES)[number];
 
 export const DEFAULT_MODEL: ModelAlias = 'sonnet';
 
+/**
+ * A model id shortened to something that fits in a label.
+ *
+ * OpenCode ids are fully qualified paths —
+ * `fireworks-ai/accounts/fireworks/models/glm-5p2` — and only the last segment
+ * identifies the model to a human. Claude and Antigravity ids have no slashes,
+ * so they come back unchanged.
+ */
+export function shortModelLabel(model: string): string {
+  if (!model) return '';
+  return model.split('/').pop() || model;
+}
+
 // ── Capabilities ─────────────────────────────────────────────────────
 
 /**

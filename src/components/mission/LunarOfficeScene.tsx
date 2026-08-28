@@ -20,6 +20,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { PixelSprite } from './PixelSprite';
+import { shortModelLabel } from '@/lib/team/types';
 
 export type WorkerId = 'planner' | 'reviewer' | 'coder' | 'tester' | 'supervisor' | 'auditor';
 
@@ -1007,7 +1008,15 @@ function MemberStatCard({
       <div className="flex items-center gap-1.5">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: stats.color }} />
         <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-ink">{stats.name}</span>
-        <span className="shrink-0 text-[9px] uppercase tracking-wider text-ink-faint">{stats.model || 'team'}</span>
+        {/* The leaf, not the whole id. OpenCode models are fully qualified
+            paths — `fireworks-ai/accounts/fireworks/models/glm-5p2` — and the
+            full string is wider than the card it sits in. */}
+        <span
+          className="shrink-0 text-[9px] uppercase tracking-wider text-ink-faint"
+          title={stats.model || undefined}
+        >
+          {shortModelLabel(stats.model) || 'team'}
+        </span>
       </div>
 
       <p className="mt-1.5 line-clamp-2 text-[10px] leading-snug text-ink-soft">
