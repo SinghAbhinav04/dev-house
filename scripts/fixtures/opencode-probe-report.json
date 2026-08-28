@@ -1,0 +1,76 @@
+{
+  "opencodeVersion": "1.16.2",
+  "model": "opencode/hy3-free",
+  "probedAt": "2026-08-28T12:40:52.353Z",
+  "streamEventCount": 9,
+  "eventKinds": {
+    "step_start": 3,
+    "tool_use": 4,
+    "step_finish": 2
+  },
+  "topLevelKeys": [
+    "part",
+    "sessionID",
+    "timestamp",
+    "type"
+  ],
+  "sessionIdSeen": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+  "pluginCallCount": 8,
+  "pluginDirs": [
+    "plugin",
+    "plugins"
+  ],
+  "pluginInputKeys": [
+    "callID",
+    "sessionID",
+    "tool"
+  ],
+  "pluginCtxKeys": [
+    "client",
+    "project",
+    "worktree",
+    "directory",
+    "experimental_workspace",
+    "serverUrl",
+    "$"
+  ],
+  "identityReachesPlugin": true,
+  "toolArgKeys": {
+    "bash": {
+      "keys": [
+        "command",
+        "description"
+      ],
+      "sample": {
+        "command": "echo probe-ran",
+        "description": "Run echo probe-ran command"
+      }
+    },
+    "glob": {
+      "keys": [
+        "pattern"
+      ],
+      "sample": {
+        "pattern": "**/notes.txt"
+      }
+    },
+    "read": {
+      "keys": [
+        "filePath"
+      ],
+      "sample": {
+        "filePath": "/private/tmp/probe-project/notes.txt"
+      }
+    },
+    "write": {
+      "keys": [
+        "content",
+        "filePath"
+      ],
+      "sample": {
+        "content": "hello",
+        "filePath": "/private/tmp/probe-project/probe-output.txt"
+      }
+    }
+  }
+}

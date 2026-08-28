@@ -269,6 +269,7 @@ export default function TeamPage() {
               key={selected.id}
               member={selected}
               clis={team.clis ?? []}
+              teamCli={team.roster.teamCli}
               onUpdate={(patch) => updateMember(selected.id, patch)}
               onRole={(role) => setRole(selected.id, role)}
               onAddSkill={(name, description, body) => addSkill(selected.id, name, description, body)}
@@ -617,6 +618,7 @@ function CreateMemberForm({
 function MemberDetail({
   member,
   clis,
+  teamCli,
   onUpdate,
   onRole,
   onAddSkill,
@@ -625,6 +627,7 @@ function MemberDetail({
 }: {
   member: TeamMemberView;
   clis: CliOption[];
+  teamCli: CliId;
   onUpdate: (patch: Record<string, unknown>) => void;
   onRole: (role: string) => void;
   onAddSkill: (name: string, description: string, body: string) => Promise<{ ok: boolean }>;
@@ -635,6 +638,25 @@ function MemberDetail({
   // this build cannot run, in which case the selects fall back to the built-in
   // vocabulary rather than rendering empty.
   const cli = clis.find((option) => option.id === member.cli);
+
+  // Whether the team-wide model applies to this member at all. It does not
+  // once they are on a different engine: a model id belongs to exactly one CLI.
+  const followsTeamModel = member.cli === teamCli;
+
+  const defaultForCli =
+    cli?.models.find((model) => model.id === cli.defaultModel)?.label ?? cli?.defaultModel ?? '';
+
+  const defaultModelLabel = followsTeamModel
+    ? 'Team default'
+    : defaultForCli
+      ? `${cli?.label} default — ${defaultForCli}`
+      : 'This CLI’s default';
+
+  const modelHint = !followsTeamModel
+    ? 'The team model belongs to another CLI, so it does not apply here.'
+    : cli?.effortInModelId
+      ? 'This CLI builds the model id from the effort below.'
+      : 'Empty follows the team default.';
   const [tab, setTab] = useState<'settings' | 'role' | 'skills'>('settings');
   const [role, setRoleDraft] = useState(member.role);
   const [roleDirty, setRoleDirty] = useState(false);
@@ -775,20 +797,19 @@ function MemberDetail({
               </select>
             </Field>
 
-            <Field
-              label="Model"
-              hint={
-                cli?.effortInModelId
-                  ? 'This CLI builds the model id from the effort below.'
-                  : 'Empty follows the team default.'
-              }
-            >
+            <Field label="Model" hint={modelHint}>
               <select
                 value={member.model}
                 onChange={(e) => onUpdate({ model: e.target.value })}
                 className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
               >
-                <option value="">Team default</option>
+                {/* The empty option has to say what it will actually resolve
+                    to. "Team default" is only true for a member on the team's
+                    own engine — for anyone else the team model is a name their
+                    CLI has never heard of, so resolveModel falls back to that
+                    CLI's default instead. Labelling it "Team default" there
+                    described something that would not happen. */}
+                <option value="">{defaultModelLabel}</option>
                 {(cli?.models ?? []).map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.label}

@@ -1,0 +1,230 @@
+[
+  {
+    "loadedFrom": "plugin",
+    "input": {
+      "tool": "glob",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-b0479a96976dc651"
+    },
+    "args": {
+      "pattern": "**/notes.txt"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  },
+  {
+    "loadedFrom": "plugins",
+    "input": {
+      "tool": "glob",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-b0479a96976dc651"
+    },
+    "args": {
+      "pattern": "**/notes.txt"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  },
+  {
+    "loadedFrom": "plugin",
+    "input": {
+      "tool": "bash",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-91ce2732d839c703"
+    },
+    "args": {
+      "command": "echo probe-ran",
+      "description": "Run echo probe-ran command"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  },
+  {
+    "loadedFrom": "plugins",
+    "input": {
+      "tool": "bash",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-91ce2732d839c703"
+    },
+    "args": {
+      "command": "echo probe-ran",
+      "description": "Run echo probe-ran command"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  },
+  {
+    "loadedFrom": "plugin",
+    "input": {
+      "tool": "write",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-819b378e0fc67f48"
+    },
+    "args": {
+      "content": "hello",
+      "filePath": "/private/tmp/probe-project/probe-output.txt"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  },
+  {
+    "loadedFrom": "plugins",
+    "input": {
+      "tool": "write",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-819b378e0fc67f48"
+    },
+    "args": {
+      "content": "hello",
+      "filePath": "/private/tmp/probe-project/probe-output.txt"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  },
+  {
+    "loadedFrom": "plugin",
+    "input": {
+      "tool": "read",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-a9af0ac10080eb44"
+    },
+    "args": {
+      "filePath": "/private/tmp/probe-project/notes.txt"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  },
+  {
+    "loadedFrom": "plugins",
+    "input": {
+      "tool": "read",
+      "sessionID": "ses_fb79cb11dffeOaWZpBkeTfS1B4",
+      "callID": "chatcmpl-tool-a9af0ac10080eb44"
+    },
+    "args": {
+      "filePath": "/private/tmp/probe-project/notes.txt"
+    },
+    "outputKeys": [
+      "args"
+    ],
+    "ctxKeys": [
+      "client",
+      "project",
+      "worktree",
+      "directory",
+      "experimental_workspace",
+      "serverUrl",
+      "$"
+    ],
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "cwd": "/private/tmp/probe-project"
+  }
+]
