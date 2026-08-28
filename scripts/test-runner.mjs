@@ -330,7 +330,7 @@ assert.ok(
 
 assert.throws(
   () => buildArgs({ prompt: 'x', projectDir: '/tmp/p', model: 'sonnet' }, { pluginDirs: [] }),
-  /roleFile or systemPrompt/,
+  /role file or a system prompt/,
   'a turn with no system prompt at all is a programming error, on either backend',
 );
 

@@ -6,7 +6,9 @@ import { homedir, tmpdir } from 'node:os';
 
 import type { MemberCapabilities } from '../src/lib/team/types.ts';
 import { resolveCli } from '../src/lib/cli/registry.ts';
-import type { AgentCli, CliId } from '../src/lib/cli/types.ts';
+import type { AgentCli, CliId, PathLayout } from '../src/lib/cli/types.ts';
+
+export type { PathLayout };
 
 /**
  * The adapter for a spawn.
@@ -258,26 +260,9 @@ export function getNetworkProfile(capabilities?: MemberCapabilities): 'research'
   return capabilities?.network ?? 'none';
 }
 
-/**
- * Resolved per spawn, not per process. The previous module-level constant meant
- * every member in a run shared one permission mode, which made a per-member
- * setting impossible to honour.
- */
-function resolvePermissionMode(opts: RunnerOptions): string {
-  return opts.permissionMode || process.env.PIPELINE_PERMISSION_MODE || 'auto';
-}
-
-function permissionArgs(opts: RunnerOptions): string[] {
-  const mode = resolvePermissionMode(opts);
-
-  // Legacy spelling from the run-level toggle; the CLI takes it as a flag
-  // rather than a --permission-mode value.
-  if (mode === 'dangerously-skip-permissions') {
-    return ['--dangerously-skip-permissions'];
-  }
-
-  return ['--permission-mode', mode];
-}
+// Permission-mode resolution moved onto the adapters: how a mode is spelled on
+// the command line is the CLI's business, and the three spell it differently.
+// The shared resolution lives in src/lib/cli/args.ts.
 
 /** Container-side plugin mount point for the Nth attached plugin directory. */
 export function containerPluginDir(index: number): string {
@@ -286,20 +271,6 @@ export function containerPluginDir(index: number): string {
 
 /** Container-side mount point for the member's role file. */
 export const CONTAINER_ROLE_FILE = '/opt/pipeline/role.md';
-
-/**
- * Where the files a spawn refers to actually live, from the CLI's point of view.
- *
- * The host runner sees real paths; the docker runner sees the mount points it
- * bound them to. Isolating that difference here is what lets one arg builder
- * serve both — the flag vocabulary used to be written out twice, once per
- * backend, so a new flag had to be added in two places and a mistake in either
- * copy only showed up on one of them.
- */
-export interface PathLayout {
-  roleFile?: string;
-  pluginDirs: string[];
-}
 
 /** What the host sees: the paths exactly as they are on disk. */
 export function hostLayout(opts: RunnerOptions): PathLayout {
@@ -318,51 +289,14 @@ export function containerLayout(opts: RunnerOptions): PathLayout {
 }
 
 /**
- * The argv for one Claude Code turn, against a given view of the filesystem.
+ * The argv for one turn, against a given view of the filesystem.
  *
- * Every flag here is Claude Code's own vocabulary. When a second CLI lands this
- * becomes one implementation of an adapter rather than the only way to build a
- * command line.
+ * The flags themselves belong to the member's CLI, so this is a lookup rather
+ * than a list. It used to be Claude Code's vocabulary written out twice, once
+ * per backend.
  */
 export function buildArgs(opts: RunnerOptions, layout: PathLayout): string[] {
-  if (!hasValue(layout.roleFile) && !hasValue(opts.systemPrompt)) {
-    throw new Error('RunnerOptions requires either roleFile or systemPrompt');
-  }
-
-  const args: string[] = [
-    '-p', opts.prompt,
-    ...permissionArgs(opts),
-    '--model', opts.model,
-    '--output-format', 'stream-json',
-    '--verbose',
-  ];
-
-  if (hasValue(layout.roleFile)) {
-    args.push('--system-prompt-file', layout.roleFile);
-  } else if (hasValue(opts.systemPrompt)) {
-    args.push('--system-prompt', opts.systemPrompt);
-  }
-
-  if (hasValue(opts.effort)) {
-    args.push('--effort', opts.effort);
-  }
-
-  // Each member's skills are packaged as a session-scoped plugin. This is the
-  // only mechanism that isolates skills per member — every member in a run
-  // shares one working directory, so <cwd>/.claude/skills could not.
-  for (const dir of layout.pluginDirs) {
-    args.push('--plugin-dir', dir);
-  }
-
-  if (hasValue(opts.resume)) {
-    args.push('--resume', opts.resume);
-  }
-
-  if (opts.jsonSchema) {
-    args.push('--json-schema', JSON.stringify(opts.jsonSchema));
-  }
-
-  return args;
+  return cliFor(opts).buildArgs(opts, layout);
 }
 
 /** The argv for a turn running directly on the host. */

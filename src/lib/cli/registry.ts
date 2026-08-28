@@ -7,11 +7,13 @@
  * self-tested.
  */
 
+import { antigravityCli } from './antigravity.ts';
 import { claudeCli } from './claude.ts';
 import { DEFAULT_CLI, isCliId, type AgentCli, type CliId } from './types.ts';
 
 const ADAPTERS: Partial<Record<CliId, AgentCli>> = {
   claude: claudeCli,
+  antigravity: antigravityCli,
 };
 
 /** The CLIs a member can actually be assigned to right now. */

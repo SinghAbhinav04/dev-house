@@ -103,6 +103,51 @@ export interface ToolVocabulary {
   argKeys: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
+/**
+ * Where the files a spawn refers to actually live, from the CLI's point of
+ * view: real paths on the host, mount points inside a container.
+ *
+ * Isolating that difference is what lets one arg builder serve both backends
+ * instead of the flag list being written out once per backend.
+ */
+export interface PathLayout {
+  roleFile?: string;
+  pluginDirs: string[];
+}
+
+/**
+ * What an adapter needs in order to build a command line.
+ *
+ * A narrower view of the runner's options, declared here rather than imported
+ * from the runner so an adapter and the runner do not have to import each
+ * other. `RunnerOptions` satisfies this structurally.
+ */
+export interface SpawnRequest {
+  prompt: string;
+  projectDir: string;
+  model: string;
+  systemPrompt?: string;
+  resume?: string;
+  jsonSchema?: Record<string, unknown>;
+  effort?: string;
+  permissionMode?: string;
+}
+
+/**
+ * A model a member can be pointed at.
+ *
+ * A *family*, not a specific id. Antigravity bakes the effort level into the
+ * model name (`gemini-3.7-flash-high`), so listing every combination would put
+ * the same choice in two places and let them disagree. The family is the
+ * choice; `efforts` says which levels it comes in.
+ */
+export interface CliModel {
+  id: string;
+  label: string;
+  /** Omitted when the model has no effort variants at all. */
+  efforts?: readonly Effort[];
+}
+
 export interface AgentCli {
   id: CliId;
   /** Human-facing name, for the team page and the office badge. */
@@ -116,6 +161,12 @@ export interface AgentCli {
   efforts: readonly Effort[];
   /** Permission modes this CLI accepts. */
   permissionModes: readonly MemberPermissionMode[];
+  /** What the UI offers for this CLI. */
+  models: readonly CliModel[];
+  /** Used when a member on this CLI has expressed no preference. */
+  defaultModel: string;
   tools: ToolVocabulary;
   createDecoder(): AgentDecoder;
+  /** The argv for one turn, against a given view of the filesystem. */
+  buildArgs(request: SpawnRequest, layout: PathLayout): string[];
 }

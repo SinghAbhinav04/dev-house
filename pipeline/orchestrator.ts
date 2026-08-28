@@ -75,7 +75,8 @@ import {
 } from '../src/lib/team/memory.ts';
 import { writeJsonAtomic } from '../src/lib/atomic-write.ts';
 import type { AgentEvent, ResultEvent } from '../src/lib/cli/decoder.ts';
-import { resolveCli } from '../src/lib/cli/registry.ts';
+import { findCli, resolveCli } from '../src/lib/cli/registry.ts';
+import { installGates } from '../src/lib/cli/gates.ts';
 import type { AgentCli } from '../src/lib/cli/types.ts';
 import {
   billableTokens,
@@ -437,7 +438,27 @@ try { execFileSync('chmod', ['+x', join(projectDir, '.claude', 'hooks', 'approva
 
 // The hook resolves member capabilities from this manifest. Written by the
 // orchestrator, never by an agent — .claude/ is unwritable from inside a run.
+// It goes first because the gate self-test below is driven against it.
 writeTeamManifest(projectDir, roster);
+
+// Install and *verify* a gate for every engine on this run. A member whose
+// gate cannot be shown to refuse what it should does not run: copying a file
+// into place is not evidence that it works, and the failures that matter here
+// — a lost executable bit, a missing jq, an argument key that reads empty —
+// all look exactly like success until something writes where it should not
+// have been able to.
+//
+// Deliberately no override. "Run my team with nothing enforcing what they may
+// do" is not a choice worth offering in a system whose whole premise is that
+// the enforcement is real.
+{
+  const runClis = [...new Set(roster.members.filter((m) => m.enabled).map((m) => m.cli))]
+    .map((id) => findCli(id))
+    .filter((cli): cli is AgentCli => cli !== null);
+
+  const selfTestMember = roster.members.find((m) => m.enabled)?.id;
+  if (selfTestMember) installGates(projectDir, BUILDUI_DIR, runClis, selfTestMember);
+}
 
 // Members drop memory entries into .squad/memory/inbox/; the directory must
 // exist before the first turn or the write is rejected as an unknown path.

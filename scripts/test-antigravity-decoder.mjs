@@ -269,4 +269,81 @@ assert.deepEqual(
 );
 assert.deepEqual(toCanonicalArgs('browser_press_key', { Key: 'a' }), {}, 'an unmapped tool has no translation');
 
+// ── The adapter: model, effort, and the command line ─────────────────
+
+const { antigravityCli, resolveAntigravityModel } = await import('../src/lib/cli/antigravity.ts');
+
+// Effort is baked into agy's model ids AND there is a separate --effort flag
+// whose interaction is undocumented. The catalog therefore lists families and
+// derives the id from the member's effort, so there is one knob rather than two
+// that can disagree.
+assert.equal(resolveAntigravityModel('gemini-3.7-flash', 'medium').modelId, 'gemini-3.7-flash-medium');
+assert.equal(resolveAntigravityModel('gemini-3.7-flash', 'low').modelId, 'gemini-3.7-flash-low');
+
+const clamped = resolveAntigravityModel('gemini-3.7-flash', 'max');
+assert.equal(clamped.modelId, 'gemini-3.7-flash-high', 'an effort above the model\'s range comes down to its top');
+assert.equal(clamped.clampedFrom, 'max', 'and the caller is told, so it can say so rather than run at a level nobody chose');
+
+// gemini-3.1-pro has low and high but no medium — a real gap in agy's catalog.
+const noMedium = resolveAntigravityModel('gemini-3.1-pro', 'medium');
+assert.equal(noMedium.modelId, 'gemini-3.1-pro-low', 'medium falls to the nearest level at or below it');
+assert.equal(noMedium.clampedFrom, 'medium');
+assert.equal(resolveAntigravityModel('gemini-3.1-pro', 'high').modelId, 'gemini-3.1-pro-high');
+
+// Models with no variants take no suffix at all.
+assert.equal(resolveAntigravityModel('claude-sonnet-4-6', 'max').modelId, 'claude-sonnet-4-6');
+assert.equal(resolveAntigravityModel('gpt-oss-120b-medium', 'low').modelId, 'gpt-oss-120b-medium');
+
+// A fully qualified id the catalog does not list passes through untouched —
+// including agy's own suffixed names, which someone may well type by hand.
+assert.equal(resolveAntigravityModel('gemini-3.7-flash-high', 'low').modelId, 'gemini-3.7-flash-high');
+assert.equal(resolveAntigravityModel('some-future-model', 'high').modelId, 'some-future-model');
+
+const argv = antigravityCli.buildArgs(
+  { prompt: 'do the thing', projectDir: '/p', model: 'gemini-3.7-flash', effort: 'high', permissionMode: 'acceptEdits' },
+  { pluginDirs: [], roleFile: 'reviewer' },
+);
+
+assert.ok(argv.includes('--print'), 'the one-shot flag is --print; agy has no -p meaning prompt');
+assert.equal(argv[argv.indexOf('--model') + 1], 'gemini-3.7-flash-high');
+assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json');
+assert.equal(argv[argv.indexOf('--add-dir') + 1], '/p', 'the project root is named rather than inferred');
+assert.ok(argv.includes('--disable-slash-commands'), 'a slash command could reach a subagent');
+
+assert.ok(
+  !argv.includes('--effort'),
+  'effort rides in the model id, so passing it twice cannot make the two disagree',
+);
+
+// Reads far worse than it is: headless agy auto-denies anything needing a
+// prompt, so without this a member cannot write at all. The probe confirmed it
+// does NOT disable PreToolUse hooks, so the capability manifest still decides.
+assert.ok(argv.includes('--dangerously-skip-permissions'));
+assert.equal(argv[argv.indexOf('--mode') + 1], 'accept-edits');
+
+const planning = antigravityCli.buildArgs(
+  { prompt: 'plan it', projectDir: '/p', model: 'gemini-3.7-flash', permissionMode: 'plan' },
+  { pluginDirs: [] },
+);
+assert.equal(planning[planning.indexOf('--mode') + 1], 'plan');
+assert.ok(!planning.includes('--dangerously-skip-permissions'), 'plan mode writes nothing, so it needs no widening');
+
+const resumed = antigravityCli.buildArgs(
+  { prompt: 'carry on', projectDir: '/p', model: 'gemini-3.7-flash', resume: 'conv-7' },
+  { pluginDirs: [] },
+);
+assert.equal(resumed[resumed.indexOf('--conversation') + 1], 'conv-7', 'agy resumes by --conversation, not --resume');
+
+// agy's own turn timeout defaults to exactly our idle timeout, and the two
+// measure different things — ours resets on every line, agy's does not. Left
+// alone, every long turn would be killed by agy before we ever called it stalled.
+const timeout = Number(resumed[resumed.indexOf('--print-timeout') + 1].replace('m', ''));
+assert.ok(timeout >= 20, 'agy\'s backstop is set well above our stall detector, not level with it');
+
+const schema = antigravityCli.buildArgs(
+  { prompt: 'verdict please', projectDir: '/p', model: 'gemini-3.7-flash', jsonSchema: { type: 'object' } },
+  { pluginDirs: [] },
+);
+assert.ok(schema.includes('--json-schema'), 'structured output is native here, not prompted');
+
 console.log('antigravity decoder checks passed');

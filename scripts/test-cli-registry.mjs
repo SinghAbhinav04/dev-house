@@ -35,7 +35,7 @@ assert.equal(DEFAULT_CLI, 'claude', 'the default is what every existing member i
 // installed and self-tested.
 
 const available = availableClis().map((cli) => cli.id);
-assert.deepEqual(available, ['claude'], 'only Claude Code has an adapter so far');
+assert.deepEqual(available.sort(), ['antigravity', 'claude'], 'Claude Code and Antigravity have adapters');
 
 for (const id of available) {
   assert.ok(CLI_IDS.includes(id), `${id} is a known id`);
@@ -45,6 +45,20 @@ assert.equal(findCli('claude'), claudeCli);
 assert.equal(findCli('opencode'), null, 'a known id with no adapter yet resolves to nothing');
 assert.equal(findCli('nonsense'), null);
 assert.equal(findCli(undefined), null);
+
+// Every registered adapter has to be complete enough to actually spawn with.
+for (const cli of availableClis()) {
+  assert.ok(cli.binary, `${cli.id} names a binary`);
+  assert.ok(cli.label, `${cli.id} has a label for the UI`);
+  assert.ok(cli.models.length > 0, `${cli.id} offers at least one model`);
+  assert.ok(
+    cli.models.some((model) => model.id === cli.defaultModel) || cli.defaultModel.length > 0,
+    `${cli.id} has a default model`,
+  );
+  assert.ok(cli.permissionModes.length > 0, `${cli.id} accepts at least one permission mode`);
+  assert.equal(typeof cli.buildArgs, 'function', `${cli.id} can build a command line`);
+  assert.equal(typeof cli.tools.toCanonical, 'function', `${cli.id} can translate tool names`);
+}
 
 // ── resolveCli falls back; requireCli does not ───────────────────────
 //
@@ -56,7 +70,7 @@ assert.equal(findCli(undefined), null);
 
 assert.equal(resolveCli(undefined), claudeCli, 'a roster with no cli field reads as Claude Code');
 assert.equal(resolveCli(''), claudeCli);
-assert.equal(resolveCli('opencode'), claudeCli, 'an unregistered adapter falls back rather than crashing a live run');
+assert.equal(resolveCli('opencode'), claudeCli, 'an id with no adapter falls back rather than crashing a live run');
 
 assert.equal(requireCli('claude'), claudeCli);
 assert.throws(
@@ -66,7 +80,7 @@ assert.throws(
 );
 assert.throws(
   () => requireCli('opencode'),
-  /can run: claude/,
+  /can run: /,
   'and what this build can run instead',
 );
 assert.throws(() => requireCli(undefined), /No adapter/);

@@ -7,6 +7,9 @@ import { readRoster } from './team/roster.ts';
 import { resolveSlot } from './team/slots.ts';
 import { writeTeamManifest } from './team/manifest.ts';
 import { writeJsonAtomic } from './atomic-write.ts';
+import { installGates } from './cli/gates.ts';
+import { findCli } from './cli/registry.ts';
+import type { AgentCli } from './cli/types.ts';
 
 /** Event author for orchestrator-side supervisor narration. */
 function supervisorEventAgent(): string {
@@ -175,7 +178,27 @@ export function startPipelineRun(options: {
   // The hook resolves each member's capabilities from this manifest. It is
   // written here and never by an agent — .claude/ is unwritable from inside a
   // run, which is what stops a member editing its own permissions.
-  writeTeamManifest(projectDir, readRoster());
+  //
+  // Written before the gates are installed, because the self-test below drives
+  // the real gate against this manifest.
+  const roster = readRoster();
+  writeTeamManifest(projectDir, roster);
+
+  // Install and *verify* a gate for every engine this run will use. A member
+  // whose gate cannot be proved to refuse what it should is not a member that
+  // runs — copying the file into place is not evidence that it works.
+  const runClis = [...new Set(roster.members.filter((m) => m.enabled).map((m) => m.cli))]
+    .map((id) => findCli(id))
+    .filter((cli): cli is AgentCli => cli !== null);
+
+  const selfTestMember = roster.members.find((m) => m.enabled)?.id;
+  if (selfTestMember) {
+    try {
+      installGates(projectDir, BUILDUI_DIR, runClis, selfTestMember);
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  }
 
   stagingState.projectDir = projectDir;
   stagingState.securityMode = securityMode;
