@@ -26,6 +26,7 @@ import { basename } from 'node:path';
 // --experimental-strip-types with no bundler to resolve them.
 import { extractStructuredSignal } from '../pipeline-signal.ts';
 import { summarizeToolResult } from '../events.ts';
+import type { TokenUsage } from '../team/usage.ts';
 
 /**
  * The tool vocabulary events are reported in.
@@ -106,6 +107,18 @@ export type AgentEvent =
   | ToolCallEvent
   | ToolResultEvent
   | { kind: 'structured'; value: Record<string, unknown> }
+  /**
+   * A usage reading, for CLIs that report as the turn goes rather than only at
+   * the end.
+   *
+   * `sessionKey` scopes it, because such a CLI usually reports the session's
+   * running total rather than the step's own consumption — the caller puts it
+   * through a meter that knows which. Emitting these means a turn killed
+   * mid-flight has already banked what it spent, instead of its tokens
+   * vanishing with the process. Claude Code reports only at the end, so its
+   * decoder never emits one.
+   */
+  | { kind: 'usage'; sessionKey: string; reading: TokenUsage }
   | ResultEvent;
 
 export interface AgentDecoder {

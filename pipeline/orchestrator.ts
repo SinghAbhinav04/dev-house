@@ -305,6 +305,48 @@ function attachMemory(
   }
 }
 
+/** Tool lists already checked, so a long roster does not repeat itself. */
+const toolsChecked = new Set<string>();
+
+/**
+ * Compare what a CLI says it has against what this build knows how to map.
+ *
+ * Two directions, and they are not equally serious.
+ *
+ * A tool the CLI offers that we do not map is fine and expected — Antigravity
+ * reports 57 of them, most of which no member should be calling. They reach the
+ * gate under their own name and are denied by default, which is the intended
+ * outcome. Worth one line in the log, nothing more.
+ *
+ * A tool *we* map that the CLI no longer offers is the rename signal, and it is
+ * the dangerous one: deny-by-default still holds, so nothing unsafe happens,
+ * but a coder whose `run_command` became `execute_command` cannot run a single
+ * command and will spend ten minutes failing quietly instead of saying so.
+ */
+function announceTools(cli: AgentCli, offered: string[]): void {
+  if (toolsChecked.has(cli.id)) return;
+  toolsChecked.add(cli.id);
+
+  const available = new Set(offered);
+  const mapped = Object.keys(cli.tools.argKeys);
+  const missing = mapped.filter((tool) => !available.has(tool));
+
+  emit('system', state.currentPhase, 'status', `${cli.label} offers ${offered.length} tool(s); ${mapped.length} are mapped.`);
+
+  if (missing.length > 0) {
+    emit(
+      'system',
+      state.currentPhase,
+      'failure',
+      `${cli.label} no longer offers: ${missing.join(', ')} — the tool map is out of date.`
+    );
+    emitSupervisor(
+      state.currentPhase,
+      `${cli.label} has renamed or removed ${missing.join(', ')}. Members on it are still safe — anything unrecognised is refused — but they cannot do the things those tools did, so I would rather say so than let the run look busy while achieving nothing.`
+    );
+  }
+}
+
 /** A fresh idle status map keyed by the members actually on this run. */
 function idleStatusForTeam(): Record<string, string> {
   const status: Record<string, string> = {};
@@ -894,6 +936,24 @@ async function runClaudeTurn(
 
       if (decoded.kind === 'structured') {
         structured = decoded.value;
+        return false;
+      }
+
+      if (decoded.kind === 'usage') {
+        // Banked as it arrives, so a turn killed before its result still
+        // accounts for what it spent. The meter is what makes this safe for a
+        // CLI reporting a running total: the same reading twice adds nothing.
+        recordUsage(state.usage, meterFor(cli).observe(decoded.sessionKey || agent, decoded.reading), {
+          memberId: agent,
+          model: runnerOpts.model,
+        });
+        saveUsageHighWater();
+        noteBudget(member);
+        return false;
+      }
+
+      if (decoded.kind === 'tools') {
+        announceTools(cli, decoded.tools);
         return false;
       }
 
