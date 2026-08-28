@@ -1,0 +1,232 @@
+[
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "conversationId": "0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 2,
+      "toolCall": {
+        "args": {
+          "DirectoryPath": "/tmp/probe-project",
+          "toolAction": "Listing directory files",
+          "toolSummary": "Directory listing"
+        },
+        "name": "list_dir"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  },
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "conversationId": "0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 4,
+      "toolCall": {
+        "args": {
+          "AbsolutePath": "/tmp/probe-project/notes.txt",
+          "toolAction": "Viewing notes.txt",
+          "toolSummary": "Read notes.txt"
+        },
+        "name": "view_file"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  },
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "conversationId": "0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 6,
+      "toolCall": {
+        "args": {
+          "MatchPerLine": true,
+          "Query": "interesting",
+          "SearchPath": "/tmp/probe-project",
+          "toolAction": "Searching for interesting",
+          "toolSummary": "Grep search"
+        },
+        "name": "grep_search"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  },
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "conversationId": "0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 8,
+      "toolCall": {
+        "args": {
+          "ArtifactMetadata": {
+            "RequestFeedback": false,
+            "Summary": "Probe output file containing hello",
+            "UserFacing": false
+          },
+          "CodeContent": "hello",
+          "Description": "Create probe-output.txt with content hello",
+          "Overwrite": true,
+          "TargetFile": "/tmp/probe-project/probe-output.txt",
+          "toolAction": "Creating probe-output.txt",
+          "toolSummary": "Write probe-output.txt"
+        },
+        "name": "write_to_file"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  },
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "conversationId": "0efdcca9-a09c-4761-8b3d-ff171fcce67c",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 10,
+      "toolCall": {
+        "args": {
+          "CodeContent": "hello",
+          "Description": "Create probe-output.txt with content hello",
+          "Overwrite": true,
+          "TargetFile": "/tmp/probe-project/probe-output.txt",
+          "toolAction": "Creating probe-output.txt",
+          "toolSummary": "Write file probe-output.txt"
+        },
+        "name": "write_to_file"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/0efdcca9-a09c-4761-8b3d-ff171fcce67c/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  },
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/4ad17a05-1933-4274-8244-896a44dfec33",
+      "conversationId": "4ad17a05-1933-4274-8244-896a44dfec33",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 2,
+      "toolCall": {
+        "args": {
+          "CommandLine": "echo probe-ran",
+          "Cwd": "/tmp/probe-project",
+          "WaitMsBeforeAsync": 5000,
+          "toolAction": "Running probe command",
+          "toolSummary": "Echo probe-ran command"
+        },
+        "name": "run_command"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/4ad17a05-1933-4274-8244-896a44dfec33/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  },
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/4ad17a05-1933-4274-8244-896a44dfec33",
+      "conversationId": "4ad17a05-1933-4274-8244-896a44dfec33",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 3,
+      "toolCall": {
+        "args": {
+          "AbsolutePath": "/tmp/probe-project/notes.txt",
+          "toolAction": "Viewing notes.txt",
+          "toolSummary": "View notes.txt"
+        },
+        "name": "view_file"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/4ad17a05-1933-4274-8244-896a44dfec33/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  },
+  {
+    "stdin": {
+      "artifactDirectoryPath": "$HOME/.gemini/antigravity-cli/brain/4ad17a05-1933-4274-8244-896a44dfec33",
+      "conversationId": "4ad17a05-1933-4274-8244-896a44dfec33",
+      "modelName": "gemini-3.7-flash-high",
+      "stepIdx": 5,
+      "toolCall": {
+        "args": {
+          "AllowMultiple": false,
+          "Description": "Update the second line of notes.txt to 'edited by the probe'",
+          "EndLine": 2,
+          "Instruction": "Change second line to 'edited by the probe'",
+          "ReplacementContent": "edited by the probe",
+          "StartLine": 2,
+          "TargetContent": "second line",
+          "TargetFile": "/tmp/probe-project/notes.txt",
+          "toolAction": "Editing notes.txt",
+          "toolSummary": "Edit second line of notes.txt"
+        },
+        "name": "replace_file_content"
+      },
+      "transcriptPath": "$HOME/.gemini/antigravity-cli/brain/4ad17a05-1933-4274-8244-896a44dfec33/.system_generated/logs/transcript_full.jsonl",
+      "workspacePaths": [
+        "/tmp/probe-project"
+      ]
+    },
+    "env": {
+      "PIPELINE_AGENT": "probe-member",
+      "PIPELINE_SECURITY_MODE": "fast"
+    },
+    "pwd": "/tmp/probe-project/.agents",
+    "argv0": "/tmp/probe-project/record-hook.sh"
+  }
+]
