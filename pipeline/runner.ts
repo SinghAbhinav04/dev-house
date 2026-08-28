@@ -296,7 +296,11 @@ export function containerLayout(opts: RunnerOptions): PathLayout {
  * per backend.
  */
 export function buildArgs(opts: RunnerOptions, layout: PathLayout): string[] {
-  return cliFor(opts).buildArgs(opts, layout);
+  const cli = cliFor(opts);
+  // Some engines cannot be handed a system prompt on the command line and have
+  // to read it off disk, so anything they need there is written first.
+  cli.prepare?.(opts, layout);
+  return cli.buildArgs(opts, layout);
 }
 
 /** The argv for a turn running directly on the host. */

@@ -144,8 +144,15 @@ assert.deepEqual(toCanonicalArgs('write', {}), {}, 'a call with none of its keys
 // ── The command line ─────────────────────────────────────────────────
 
 const argv = openCodeCli.buildArgs(
-  { prompt: 'do the thing', projectDir: '/p', model: 'openrouter/x', effort: 'high', permissionMode: 'acceptEdits' },
-  { pluginDirs: [], roleFile: 'reviewer' },
+  {
+    prompt: 'do the thing',
+    projectDir: '/p',
+    model: 'openrouter/x',
+    effort: 'high',
+    permissionMode: 'acceptEdits',
+    pipelineAgent: 'pat',
+  },
+  { pluginDirs: [], roleFile: '/home/me/.hackeroom/members/pat/role.md' },
 );
 
 assert.equal(argv[0], 'run');
@@ -159,7 +166,31 @@ assert.ok(!argv.includes('--attach'), 'never --attach: it severs the environment
 assert.equal(argv[argv.indexOf('--format') + 1], 'json');
 assert.equal(argv[argv.indexOf('--dir') + 1], '/p');
 assert.equal(argv[argv.indexOf('--model') + 1], 'openrouter/x');
-assert.equal(argv[argv.indexOf('--agent') + 1], 'reviewer');
+
+// ── --agent takes a NAME, never a path ───────────────────────────────
+//
+// This one hung the process. `opencode run --agent /abs/path/role.md` does not
+// error and does not exit — it waits forever with no output, so a member
+// looked stuck rather than misconfigured. The name is the member id; the
+// definition it refers to is written by prepare().
+
+assert.equal(argv[argv.indexOf('--agent') + 1], 'pat', 'the agent is named by member id');
+
+const agentValue = argv[argv.indexOf('--agent') + 1];
+assert.ok(!agentValue.startsWith('/'), 'the agent value is not a path');
+assert.ok(!agentValue.endsWith('.md'), 'nor a markdown file');
+
+const noMember = openCodeCli.buildArgs(
+  { prompt: 'x', projectDir: '/p', model: 'openrouter/x' },
+  { pluginDirs: [], roleFile: '/some/role.md' },
+);
+assert.ok(
+  !noMember.includes('--agent'),
+  'with no member to name, --agent is omitted rather than handed the role file path',
+);
+
+// prepare() is what makes that name resolve to anything.
+assert.equal(typeof openCodeCli.prepare, 'function', 'the definition has to be written before the spawn');
 
 const resumed = openCodeCli.buildArgs(
   { prompt: 'carry on', projectDir: '/p', model: 'openrouter/x', resume: 'ses_9' },

@@ -131,6 +131,8 @@ export interface SpawnRequest {
   jsonSchema?: Record<string, unknown>;
   effort?: string;
   permissionMode?: string;
+  /** The member id. Engines that name an agent per turn need something to call it. */
+  pipelineAgent?: string;
 }
 
 /**
@@ -169,6 +171,14 @@ export interface AgentCli {
   createDecoder(): AgentDecoder;
   /** The argv for one turn, against a given view of the filesystem. */
   buildArgs(request: SpawnRequest, layout: PathLayout): string[];
+  /**
+   * Anything that must exist on disk before the process starts.
+   *
+   * For engines with no `--system-prompt-file`, this is where the member's
+   * role is written into whatever file the CLI *will* read. Called once per
+   * spawn, immediately before it.
+   */
+  prepare?(request: SpawnRequest, layout: PathLayout): void;
   /**
    * Fetch the turn's reply after the process exits, for CLIs that do not put
    * it in the stream.

@@ -13,6 +13,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { createOpencodeDecoder } from './opencode-decoder.ts';
 import { OPENCODE_TOOLS } from './opencode-tools.ts';
@@ -86,6 +88,51 @@ export function exportReplyText(sessionId: string, cwd: string): string {
   return '';
 }
 
+/**
+ * What this member's generated agent is called.
+ *
+ * The member id, which is already a validated slug, so it is safe as both a
+ * filename and a CLI argument.
+ */
+function agentNameFor(request: SpawnRequest): string {
+  return request.pipelineAgent ?? '';
+}
+
+/**
+ * Write the member's role where OpenCode will actually read it.
+ *
+ * There is no `--system-prompt-file` on this CLI; a system prompt can only
+ * come from an agent definition on disk. So the role is written to
+ * `<project>/.opencode/agent/<member>.md` immediately before the spawn, and
+ * `--agent <member>` points at it.
+ *
+ * Rewritten every turn rather than created once: the role is editable in the
+ * UI, and a stale copy would be a member quietly running yesterday's
+ * instructions.
+ */
+function writeAgentDefinition(request: SpawnRequest, layout: PathLayout): void {
+  const name = agentNameFor(request);
+  if (!name) return;
+
+  let body = '';
+  if (hasValue(layout.roleFile) && existsSync(layout.roleFile)) {
+    body = readFileSync(layout.roleFile, 'utf8');
+  } else if (hasValue(request.systemPrompt)) {
+    body = request.systemPrompt;
+  }
+  if (!body.trim()) return;
+
+  const dir = join(request.projectDir, '.opencode', 'agent');
+  mkdirSync(dir, { recursive: true });
+
+  // `mode: primary` so the agent can be selected for the whole turn rather
+  // than only invoked as a subagent.
+  writeFileSync(
+    join(dir, `${name}.md`),
+    `---\ndescription: Hackeroom member ${name}\nmode: primary\n---\n\n${body.trim()}\n`
+  );
+}
+
 /** Models this install actually has, grouped later by provider in the UI. */
 export function liveOpencodeModels(): CliModel[] {
   try {
@@ -135,6 +182,7 @@ export const openCodeCli: AgentCli = {
   tools: OPENCODE_TOOLS,
   createDecoder: createOpencodeDecoder,
   fetchReplyText: exportReplyText,
+  prepare: writeAgentDefinition,
 
   buildArgs(request: SpawnRequest, layout: PathLayout): string[] {
     const args: string[] = [
@@ -149,9 +197,12 @@ export const openCodeCli: AgentCli = {
 
     if (hasValue(request.model)) args.push('--model', request.model);
 
-    // The role rides in a generated agent definition written into the project
-    // before the spawn; `roleFile` names it.
-    if (hasValue(layout.roleFile)) args.push('--agent', layout.roleFile);
+    // A NAME, never a path. `--agent /some/role.md` does not error — it hangs
+    // the process forever with no output at all, which is how this first
+    // shipped and why an OpenCode member looked stuck rather than broken. The
+    // definition the name refers to is written by prepare(), below.
+    const agentName = agentNameFor(request);
+    if (agentName) args.push('--agent', agentName);
 
     if (hasValue(request.effort)) args.push('--variant', request.effort);
     if (hasValue(request.resume)) args.push('--session', request.resume);
