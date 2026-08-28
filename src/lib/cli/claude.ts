@@ -28,6 +28,8 @@ export const claudeCli: AgentCli = {
     resumeReplaysTranscript: true,
     reportsTokens: true,
     reportsCost: true,
+    // Each result event carries only that turn's consumption.
+    usageReporting: 'delta',
   },
 
   efforts: EFFORT_LEVELS,

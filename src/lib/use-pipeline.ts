@@ -127,7 +127,7 @@ const EMPTY_STATE: PipelineState = {
     byMember: {},
     byModel: {},
   },
-  runtime: { activeTurn: null, activeTurns: {}, memoryInjected: {} },
+  runtime: { activeTurn: null, activeTurns: {}, memoryInjected: {}, usageHighWater: {} },
   events: [],
   auditFindings: [],
   auditDeployPending: false,

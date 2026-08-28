@@ -1,3 +1,5 @@
+import type { TokenUsage } from './team/usage.ts';
+
 export type TurnStatus = 'running' | 'stalled';
 
 export interface ActiveTurnState {
@@ -39,12 +41,22 @@ export interface PipelineRuntimeState {
    * transcript has seen nothing.
    */
   memoryInjected: Record<string, string[]>;
+  /**
+   * Last usage total seen per CLI session, for engines that report a running
+   * total rather than a per-step delta.
+   *
+   * Persisted because every audit action spawns a fresh orchestrator against
+   * the same run: without it, the restarted process would treat the next
+   * reading as entirely new and bank a whole conversation's tokens twice.
+   */
+  usageHighWater: Record<string, TokenUsage>;
 }
 
 export const EMPTY_RUNTIME: PipelineRuntimeState = {
   activeTurn: null,
   activeTurns: {},
   memoryInjected: {},
+  usageHighWater: {},
 };
 
 export const TURN_IDLE_TIMEOUT_MS = 300_000;
@@ -125,7 +137,15 @@ export function normalizeRuntime(raw: unknown): PipelineRuntimeState {
       ? (input.memoryInjected as Record<string, string[]>)
       : {};
 
-  return { activeTurn, activeTurns, memoryInjected };
+  // Absent in state files written before cumulative-reporting CLIs existed. An
+  // empty map means every session starts from zero, which is only wrong across
+  // a restart and only in the direction of under-counting.
+  const usageHighWater =
+    input.usageHighWater && typeof input.usageHighWater === 'object'
+      ? (input.usageHighWater as Record<string, TokenUsage>)
+      : {};
+
+  return { activeTurn, activeTurns, memoryInjected, usageHighWater };
 }
 
 /**

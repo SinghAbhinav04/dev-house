@@ -81,8 +81,10 @@ import {
   billableTokens,
   emptyBreakdown,
   normalizeUsage,
+  createUsageMeter,
   recordUsage,
   usageFromResultEvent,
+  type UsageMeter,
   type UsageBreakdown,
 } from '../src/lib/team/usage.ts';
 import { SLOT_LABELS, type SlotId, type TeamMember } from '../src/lib/team/types.ts';
@@ -165,6 +167,40 @@ function resumeFor(slot: SlotId, why: string): string | undefined {
 
 /** Members already warned about their budget, so it is said once, not per turn. */
 const budgetWarned = new Set<string>();
+
+/**
+ * Usage meters, one per CLI reporting style, shared across the whole run.
+ *
+ * Run-scoped rather than per-turn on purpose. A CLI that reports a
+ * session-cumulative total sends turn one's tokens again on turn two and again
+ * on turn three; a meter that forgot between turns would bank the whole
+ * conversation every time one resumed, and a ten-turn coding phase would report
+ * several times the tokens actually spent.
+ *
+ * Seeded from the state file so an orchestrator restart mid-run does not
+ * re-bank a conversation that was already counted — every audit action spawns a
+ * fresh orchestrator against the same run.
+ */
+const usageMeters = new Map<string, UsageMeter>();
+
+function meterFor(cli: AgentCli): UsageMeter {
+  let meter = usageMeters.get(cli.id);
+  if (!meter) {
+    meter = createUsageMeter(cli.support.usageReporting, state.runtime.usageHighWater);
+    usageMeters.set(cli.id, meter);
+  }
+  return meter;
+}
+
+/**
+ * Persist the high-water marks. Session keys are unique per session, so
+ * merging every meter's snapshot into one map cannot collide.
+ */
+function saveUsageHighWater(): void {
+  for (const meter of usageMeters.values()) {
+    Object.assign(state.runtime.usageHighWater, meter.snapshot());
+  }
+}
 
 /**
  * Warn when a member passes its token budget.
@@ -908,11 +944,17 @@ async function runClaudeTurn(
       if (decoded.kind === 'result') {
         turnResult = decoded;
         if (decoded.text) noteDiagnostic(decoded.text);
+        if (decoded.errorText) noteDiagnostic(decoded.errorText);
 
-        recordUsage(state.usage, usageFromResultEvent(decoded.raw), {
+        // Through the meter, so a CLI reporting a session-cumulative total
+        // contributes only what this reading added. For a `delta` CLI this is
+        // the identity and costs nothing.
+        const reading = usageFromResultEvent(decoded.raw);
+        recordUsage(state.usage, meterFor(cli).observe(decoded.sessionId || agent, reading), {
           memberId: agent,
           model: runnerOpts.model,
         });
+        saveUsageHighWater();
         noteBudget(member);
         flush();
 

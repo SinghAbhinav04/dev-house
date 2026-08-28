@@ -15,6 +15,7 @@
 
 import type { AgentDecoder, CanonicalTool } from './decoder.ts';
 import type { Effort, MemberPermissionMode } from '../team/types.ts';
+import type { UsageReporting } from '../team/usage.ts';
 
 export const CLI_IDS = ['claude', 'opencode', 'antigravity'] as const;
 export type CliId = (typeof CLI_IDS)[number];
@@ -65,8 +66,19 @@ export interface CliSupport {
   resumeReplaysTranscript: boolean;
   /** Whether the terminal event carries token counts. */
   reportsTokens: boolean;
-  /** Whether it carries a cost. Tokens without cost is normal; we estimate. */
+  /**
+   * Whether it carries a cost. Tokens without a cost is normal; the gap is
+   * recorded as `unpricedTokens` rather than papered over with an estimate,
+   * because a guessed number displayed like a measured one is worse than a
+   * stated blank.
+   */
   reportsCost: boolean;
+  /**
+   * Whether a usage reading is that step's own consumption or the session's
+   * running total. Getting this wrong on a `cumulative` CLI multiplies reported
+   * spend by the number of turns in the conversation.
+   */
+  usageReporting: UsageReporting;
 }
 
 /**

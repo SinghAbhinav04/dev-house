@@ -67,10 +67,25 @@ export interface ToolResultEvent {
   errorText: string;
 }
 
+/**
+ * How a turn ended, normalized across CLIs.
+ *
+ * Not every CLI distinguishes "finished" from "was cut short". Antigravity, for
+ * one, ends a turn its own timeout killed with an ordinary terminal event whose
+ * status says CANCELED — and without this, that arrives as a clean turn that
+ * happened to produce nothing, which the verdict gates would then have to guess
+ * about. Better for the decoder to say which it was than for each call site to
+ * go sniffing through `raw`.
+ */
+export type TurnOutcome = 'ok' | 'stalled' | 'error';
+
 export interface ResultEvent {
   kind: 'result';
   text: string;
   sessionId: string;
+  outcome: TurnOutcome;
+  /** Present when `outcome` is `error` and the CLI explained why. */
+  errorText: string;
   /** The raw terminal event, for usage extraction and diagnostics. */
   raw: Record<string, unknown>;
   denials: { toolName: string; toolInput: Record<string, unknown> }[];
@@ -78,6 +93,15 @@ export interface ResultEvent {
 
 export type AgentEvent =
   | { kind: 'session'; sessionId: string }
+  /**
+   * The tools this session actually has, when the CLI announces them.
+   *
+   * Lets a run check its tool-name map against reality: a tool we map that the
+   * CLI no longer offers means a rename, and a member that silently cannot run
+   * any command should fail loudly rather than do nothing for ten minutes.
+   * Claude Code does not announce them, so its decoder never emits this.
+   */
+  | { kind: 'tools'; tools: string[] }
   | { kind: 'text'; text: string }
   | ToolCallEvent
   | ToolResultEvent
@@ -258,6 +282,12 @@ export function createClaudeDecoder(): AgentDecoder {
         kind: 'result',
         text: typeof event.result === 'string' ? event.result : '',
         sessionId: typeof event.session_id === 'string' ? event.session_id : sessionId,
+        // Claude Code emits a terminal result only when the turn actually
+        // finished; a killed session closes the stream without one, and the
+        // orchestrator's close handler treats a missing result as a failure.
+        // So reaching here always means the turn ran to completion.
+        outcome: 'ok',
+        errorText: '',
         raw: event,
         denials,
       });
