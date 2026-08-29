@@ -36,6 +36,9 @@ const ARGLESS = new Map([
   ['grep', 'Grep'],
   ['webfetch', 'WebFetch'],
   ['task', 'Agent'],
+  // Loading one of this member's own attached skills. Still asked, rather than
+  // waved through here, so one file decides it for every engine.
+  ['skill', 'Skill'],
 ]);
 
 /** Tools whose verdict depends on a path or a command. */

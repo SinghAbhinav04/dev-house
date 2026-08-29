@@ -244,12 +244,28 @@ node scripts/probe-opencode.mjs
 
 The Claude Code path is the one with mileage on it. The other two are newer:
 
-- Neither OpenCode nor Antigravity has been driven through a complete
-  plan → code → test → audit build yet.
-- Attached skills currently reach Claude Code members only.
+- Attached skills reach Claude Code and OpenCode members. Antigravity cannot
+  load them at all: on `agy` 1.1.22 nothing under `.agents/` is discovered — not
+  `skills/`, not the `skills.json` its own docs describe — and the only
+  directory that does work is the user's global `~/.gemini/config/skills/`,
+  which would collide with your own skills and outlive the run. A run that has
+  attached skills it cannot deliver says so at the start rather than dropping
+  them quietly.
 - The Docker runner has no `agy` or `opencode` in its image, so an isolated
   member on either will fail at spawn rather than at run start.
 - `ARCHITECTURE.md` keeps a list of the rest.
+
+---
+
+## Support the project
+
+Hackeroom is free, noncommercial, and built in the open. If it saved you an
+afternoon — or if you just like the idea of a pixel-art office where your agents
+actually have to ask permission — you can throw a coffee my way:
+
+**☕ [buymeacoffee.com/heysinghabb](https://buymeacoffee.com/heysinghabb)**
+
+Stars, issues and pull requests are just as welcome, and free.
 
 ---
 

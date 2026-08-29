@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 
 import { createAntigravityDecoder } from '../src/lib/cli/antigravity-decoder.ts';
 import {
@@ -308,7 +309,16 @@ assert.ok(argv.includes('--print'), 'the one-shot flag is --print; agy has no -p
 assert.equal(argv[argv.indexOf('--model') + 1], 'gemini-3.7-flash-high');
 assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json');
 assert.equal(argv[argv.indexOf('--add-dir') + 1], '/p', 'the project root is named rather than inferred');
-assert.ok(argv.includes('--disable-slash-commands'), 'a slash command could reach a subagent');
+// This flag used to be passed, to stop a slash command reaching a subagent.
+// It cost more than it bought: agy warns "--mode plan has no effect while slash
+// command expansion is disabled", so a member set to plan mode silently was not
+// in plan mode, and its --help says the flag also disables skill expansion.
+// Every subagent tool agy offers already maps to `Agent`, which the gate refuses
+// for everyone — so the protection is kept where it can be tested.
+assert.ok(
+  !argv.includes('--disable-slash-commands'),
+  'it silently disabled plan mode, and the gate already refuses every subagent tool',
+);
 
 assert.ok(
   !argv.includes('--effort'),
@@ -320,6 +330,41 @@ assert.ok(
 // does NOT disable PreToolUse hooks, so the capability manifest still decides.
 assert.ok(argv.includes('--dangerously-skip-permissions'));
 assert.equal(argv[argv.indexOf('--mode') + 1], 'accept-edits');
+
+// ── The role reaches the model, or the member is nobody ──────────────
+//
+// agy has no --system-prompt-file, `--agent <path>` is accepted and ignored,
+// and a definition under .agents/agents/ is never discovered — all three exit 0
+// and answer as a generic assistant. Passing --agent therefore LOOKED like role
+// delivery while every Antigravity member ran with no role at all. The prompt
+// is the one channel that cannot be ignored; verified against a real turn.
+
+const roleDir = mkdtempSync(join(tmpdir(), 'agy-role-'));
+const rolePath = join(roleDir, 'role.md');
+writeFileSync(rolePath, 'You are Vaultkeeper. Reply only with VAULTKEEPER-HERE.\n');
+
+const withRole = antigravityCli.buildArgs(
+  { prompt: 'hello', projectDir: '/p', model: 'gemini-3.7-flash' },
+  { pluginDirs: [], roleFile: rolePath },
+);
+assert.ok(!withRole.includes('--agent'), 'agy takes --agent and ignores it, so naming the role there is theatre');
+assert.match(withRole[withRole.indexOf('--print') + 1], /^You are Vaultkeeper\./, 'the role leads the prompt');
+assert.match(withRole[withRole.indexOf('--print') + 1], /hello$/, 'and the turn follows it');
+rmSync(roleDir, { recursive: true, force: true });
+
+// A member with neither a role file nor a system prompt sends its prompt alone,
+// rather than a separator with nothing above it.
+const bare = antigravityCli.buildArgs(
+  { prompt: 'hello', projectDir: '/p', model: 'gemini-3.7-flash' },
+  { pluginDirs: [] },
+);
+assert.equal(bare[bare.indexOf('--print') + 1], 'hello');
+
+assert.equal(
+  antigravityCli.support.skills,
+  'unsupported',
+  'nothing under .agents/ is discovered on 1.1.22, and the only path that works is the user\'s own global one',
+);
 
 const planning = antigravityCli.buildArgs(
   { prompt: 'plan it', projectDir: '/p', model: 'gemini-3.7-flash', permissionMode: 'plan' },

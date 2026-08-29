@@ -185,6 +185,20 @@ const checks = [
     expect: 'allow',
     run: () => invokeHook({ agent: 'aud', toolName: 'Grep', toolInput: { pattern: 'eval' } }),
   },
+  // Attaching a skill to a member did nothing while this was missing: the
+  // fallthrough denies by default, so every member on every engine was refused
+  // its own attached documentation. A real turn answered "the request was
+  // blocked due to permission restrictions" rather than reading the skill.
+  {
+    name: 'a member can load an attached skill',
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'pat', toolName: 'Skill', toolInput: { command: 'squad-pat:house-style' } }),
+  },
+  {
+    name: 'even a read-only member can, because loading one grants nothing',
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'aud', toolName: 'Skill', toolInput: { command: 'squad-aud:audit-checklist' } }),
+  },
   {
     name: 'reviewer can use StructuredOutput',
     expect: 'allow',

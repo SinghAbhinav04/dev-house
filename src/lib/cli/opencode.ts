@@ -161,6 +161,51 @@ function writeAgentDefinition(request: SpawnRequest, layout: PathLayout): void {
   );
 }
 
+/**
+ * The environment that hands this member its skills, and only its skills.
+ *
+ * OpenCode has no `--skill` flag; skills come from config, and `skills.paths`
+ * accepts absolute directories. That is the whole mechanism — the member's
+ * existing skills directory is named where it already lives, so nothing is
+ * copied into the project and nothing is left behind to clean up.
+ *
+ * Passed as config CONTENT rather than a config FILE because a file would have
+ * to live somewhere, and anywhere it could live is shared by every member of
+ * the run. An environment variable belongs to one process.
+ *
+ * The two disable flags matter as much as the paths: left on, OpenCode also
+ * scans its own external sources and the user's Claude Code skill directories,
+ * so a member would silently inherit whatever the user happens to have
+ * installed. Off, the set is exactly what the roster attached — which is also
+ * what makes allowing the `skill` tool at the gate a bounded decision.
+ * Verified: our configured skills still load with both flags set.
+ */
+function skillEnvironment(request: SpawnRequest, layout: PathLayout): Record<string, string> {
+  void request;
+
+  // Claude packages a member's skills as a plugin, so the skills themselves sit
+  // one level in. OpenCode wants the directory that CONTAINS the skills.
+  const paths = layout.pluginDirs.map((dir) => join(dir, 'skills'));
+
+  return {
+    // Always set, even when the list is empty, and that is the whole point:
+    // naming `paths` REPLACES the defaults, while omitting it leaves them in
+    // place. A member with no skills of its own is the worst case to leave
+    // open — everything it can then reach belongs to the user. Measured, with
+    // nothing attached: flags alone still exposed the user's global OpenCode
+    // skills, and an empty array is what actually removed them.
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ skills: { paths } }),
+    // These close the other two doors: OpenCode's external skill sources, and
+    // its scan of the user's Claude Code directories — which on this machine
+    // was nineteen of the user's personal skills, in a teammate's context.
+    OPENCODE_DISABLE_EXTERNAL_SKILLS: '1',
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: '1',
+  };
+  // `customize-opencode` still shows up and cannot be turned off: it is
+  // registered in OpenCode's own code, not read from any directory. It is the
+  // engine's, not the user's, so it is left alone.
+}
+
 /** Models this install actually has, grouped later by provider in the UI. */
 export function liveOpencodeModels(): CliModel[] {
   try {
@@ -190,7 +235,11 @@ export const openCodeCli: AgentCli = {
     // No --system-prompt-file either; the role becomes a generated agent
     // definition inside the project.
     systemPrompt: 'generated-agent',
-    skills: 'project-materialised',
+    // Not materialised after all: `skills.paths` takes absolute directories, so
+    // the member's own skills are named where they already are. Nothing is
+    // written into the project, and two members could hold different skills at
+    // the same time — which the materialised route could never have done.
+    skills: 'config-paths',
     // --session resumes the same conversation, so the memory delta is safe.
     resumeReplaysTranscript: true,
     reportsTokens: true,
@@ -212,6 +261,7 @@ export const openCodeCli: AgentCli = {
   createDecoder: createOpencodeDecoder,
   fetchTurnResult: exportTurnResult,
   prepare: writeAgentDefinition,
+  spawnEnv: skillEnvironment,
 
   buildArgs(request: SpawnRequest, layout: PathLayout): string[] {
     const args: string[] = [

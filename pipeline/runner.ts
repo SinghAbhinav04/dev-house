@@ -313,9 +313,13 @@ function buildContainerClaudeArgs(opts: RunnerOptions): string[] {
   return buildArgs(opts, containerLayout(opts));
 }
 
-export function buildRunnerEnv(opts: RunnerOptions): NodeJS.ProcessEnv {
+export function buildRunnerEnv(opts: RunnerOptions, layout: PathLayout = hostLayout(opts)): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    // What the engine needs that does not fit on a command line — OpenCode's
+    // skills, which have a config file and no flag. Under `extraEnv` so an
+    // operator override still wins.
+    ...cliFor(opts).spawnEnv?.(opts, layout),
     ...opts.extraEnv,
     // Reset Claude's working directory after each Bash command so a `cd`
     // does not persist into later Write/Edit tool calls.
@@ -412,6 +416,14 @@ export function buildDockerArgs(
 
   dockerArgs.push('-e', 'CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1');
   dockerArgs.push('-e', `AGENT_NETWORK_PROFILE=${getNetworkProfile(opts.capabilities)}`);
+
+  // The engine's own environment. It has to be forwarded explicitly: the env
+  // this function's caller builds belongs to the `docker` process, and nothing
+  // of it reaches the container. Built against the CONTAINER's layout, because
+  // any path in it names a mount point rather than a host directory.
+  for (const [key, value] of Object.entries(cliFor(opts).spawnEnv?.(opts, containerLayout(opts)) ?? {})) {
+    dockerArgs.push('-e', `${key}=${value}`);
+  }
 
   dockerArgs.push(
     DOCKER_IMAGE,

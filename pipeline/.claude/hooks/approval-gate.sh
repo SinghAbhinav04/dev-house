@@ -126,9 +126,19 @@ case "$MEMBER_BASH" in
 esac
 
 # ── Auto-approve read-only tools (all members) ───────────────────────
+#
+# Skill belongs here, and its absence is why attaching a skill to a member did
+# nothing at all: the fallthrough below denies by default, so every member on
+# every engine was refused its own attached documentation. Verified against a
+# real turn, which answered "the request was blocked due to permission
+# restrictions" instead of reading the skill.
+#
+# Loading a skill only reads a file this system attached to this member. It
+# grants nothing: whatever the skill goes on to tell the model to do still
+# arrives here as a Write, a Bash or a WebFetch and is judged on its own.
 
 case "$TOOL_NAME" in
-  Read|Glob|Grep|ToolSearch|TaskCreate|TaskUpdate|TaskGet|TaskList|TaskOutput|LSP|StructuredOutput)
+  Read|Glob|Grep|Skill|ToolSearch|TaskCreate|TaskUpdate|TaskGet|TaskList|TaskOutput|LSP|StructuredOutput)
     echo '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}'
     exit 0
     ;;

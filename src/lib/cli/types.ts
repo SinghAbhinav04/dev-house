@@ -52,16 +52,26 @@ export interface CliSupport {
    * `generated-agent` — it can only come from an agent definition we write to
    * disk first, which puts the member's role inside the project and therefore
    * within reach of anything that can write there.
+   * `in-prompt` — the engine has no working mechanism at all, so the role is
+   * prepended to the turn's prompt. It costs the role's tokens on every turn
+   * rather than once, and the model may weigh it as the user's words instead
+   * of the system's.
    */
-  systemPrompt: 'file-flag' | 'generated-agent';
+  systemPrompt: 'file-flag' | 'generated-agent' | 'in-prompt';
   /**
    * `session-plugin-dir` — skills attach per invocation, so members cannot see
    * each other's.
-   * `project-materialised` — they load from a fixed path, so the active
-   * member's have to be written there just before it spawns. That works only
-   * while exactly one member runs at a time.
+   * `config-paths` — the engine reads them from absolute directories named in
+   * its configuration, which is also per invocation and copies nothing.
+   * `project-materialised` — they load from a fixed path inside the project, so
+   * the active member's have to be written there just before it spawns. That
+   * works only while exactly one member runs at a time, and it leaves one
+   * member's documentation readable by the next.
+   * `unsupported` — there is no mechanism that can be used safely. A member on
+   * such an engine keeps its skills on the roster and simply does not get them,
+   * which the run says out loud rather than dropping quietly.
    */
-  skills: 'session-plugin-dir' | 'project-materialised';
+  skills: 'session-plugin-dir' | 'config-paths' | 'project-materialised' | 'unsupported';
   /** Whether a resumed turn re-sends the whole prior transcript to the model. */
   resumeReplaysTranscript: boolean;
   /** Whether the terminal event carries token counts. */
@@ -179,6 +189,16 @@ export interface AgentCli {
    * spawn, immediately before it.
    */
   prepare?(request: SpawnRequest, layout: PathLayout): void;
+  /**
+   * Environment this CLI needs for one turn, merged over the runner's own.
+   *
+   * Exists because not every engine takes its configuration on the command
+   * line. OpenCode's skills are the case in point: there is no flag for them,
+   * only a config file, and a config file inside the project would be one
+   * shared file for every member. An environment variable is per-process, so
+   * it stays per-member.
+   */
+  spawnEnv?(request: SpawnRequest, layout: PathLayout): Record<string, string>;
   /**
    * Fetch what the turn actually did, after the process exits, for CLIs that
    * do not put it in the stream.

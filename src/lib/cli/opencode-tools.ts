@@ -28,6 +28,11 @@ const CANONICAL_BY_NATIVE: Readonly<Record<string, CanonicalTool>> = {
   list: 'Glob',
   webfetch: 'WebFetch',
 
+  // Loading one of the member's own attached skills. Named `skill` here and
+  // `Skill` in the canonical vocabulary, where the gate allows it — the skills
+  // it can reach are only the ones spawnEnv pointed it at.
+  skill: 'Skill',
+
   // OpenCode's sub-agent tool. Blocked for everyone, and the gate reads no
   // argument to do it, so no key is needed.
   task: 'Agent',

@@ -63,7 +63,7 @@ import {
   detectPlanningStep,
 } from '../src/lib/pipeline-planning.ts';
 import { createRunner, isRecoverableDockerAuthFailure } from './runner.ts';
-import { readRoster } from '../src/lib/team/roster.ts';
+import { listMemberSkills, readRoster } from '../src/lib/team/roster.ts';
 import { buildRunPlan, describeRunPlan } from '../src/lib/team/slots.ts';
 import { writeTeamManifest } from '../src/lib/team/manifest.ts';
 import { memberSpawnOptions } from '../src/lib/team/spawn.ts';
@@ -324,6 +324,33 @@ const toolsChecked = new Set<string>();
  * but a coder whose `run_command` became `execute_command` cannot run a single
  * command and will spend ten minutes failing quietly instead of saying so.
  */
+/**
+ * Say which attached skills will not arrive, before anyone starts working.
+ *
+ * Not every engine can carry them. A member whose attached documentation
+ * silently never loads is the failure this system is least able to notice: it
+ * produces worse work for a reason nobody can see, and the roster goes on
+ * showing the skill as attached. Not fatal — the member is still useful without
+ * it — so this says so and continues.
+ */
+function announceUnavailableSkills(): void {
+  for (const member of roster.members.filter((m) => m.enabled)) {
+    const cli = findCli(member.cli);
+    if (!cli || cli.support.skills !== 'unsupported') continue;
+
+    const skills = listMemberSkills(member.id);
+    if (skills.length === 0) continue;
+
+    emit(
+      'system',
+      state.currentPhase,
+      'failure',
+      `${member.name} has ${skills.length} skill(s) attached (${skills.join(', ')}) but runs on ` +
+        `${cli.label}, which cannot load them. They will not be available this run.`
+    );
+  }
+}
+
 function announceTools(cli: AgentCli, offered: string[]): void {
   if (toolsChecked.has(cli.id)) return;
   toolsChecked.add(cli.id);
@@ -2444,6 +2471,9 @@ async function run() {
     emit('system', state.currentPhase || 'concept', 'status', 'Resuming existing pipeline state');
     emitSupervisor(state.currentPhase || 'concept', 'I am resuming the existing team state from the last saved checkpoint.');
   }
+
+  // Before anyone works: what the roster promises that this run cannot deliver.
+  announceUnavailableSkills();
 
   const initialPipelineStatus = state.pipelineStatus;
   const initialResumeAction = state.resumeAction || 'none';

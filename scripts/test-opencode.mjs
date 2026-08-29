@@ -128,6 +128,48 @@ assert.deepEqual(
   'a command that merely failed is not a denial',
 );
 
+// ── Skills come from the environment, not the command line ───────────
+//
+// OpenCode has no flag for skills, only config, and `skills.paths` takes
+// absolute directories — so nothing is copied into the project and two members
+// can hold different skills at once. All of this was measured against the
+// binary, because every part of it is the kind of thing that fails silently.
+
+const withSkills = openCodeCli.spawnEnv(
+  { prompt: 'x', projectDir: '/p', model: 'm', pipelineAgent: 'pat' },
+  { pluginDirs: ['/home/me/.hackeroom/members/pat/plugin'] },
+);
+assert.deepEqual(
+  JSON.parse(withSkills.OPENCODE_CONFIG_CONTENT).skills.paths,
+  ['/home/me/.hackeroom/members/pat/plugin/skills'],
+  'the member is pointed at its own skills where they already live',
+);
+
+// The empty case is the one that matters. Naming `paths` REPLACES OpenCode's
+// defaults; omitting it leaves them, and the defaults include the user's own
+// global skills. Measured with nothing attached: the disable flags alone still
+// left the user's personal library visible to the member, and only the empty
+// array removed it.
+const noSkills = openCodeCli.spawnEnv(
+  { prompt: 'x', projectDir: '/p', model: 'm' },
+  { pluginDirs: [] },
+);
+assert.deepEqual(
+  JSON.parse(noSkills.OPENCODE_CONFIG_CONTENT).skills.paths,
+  [],
+  'a member with no skills is given an empty list, not left on the defaults',
+);
+for (const env of [withSkills, noSkills]) {
+  assert.equal(env.OPENCODE_DISABLE_EXTERNAL_SKILLS, '1');
+  assert.equal(env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS, '1', 'or the user\'s Claude skills load into a teammate');
+}
+
+assert.equal(
+  openCodeCli.support.skills,
+  'config-paths',
+  'not materialised into the project: nothing is copied, so nothing is left behind',
+);
+
 // ── The vocabulary ───────────────────────────────────────────────────
 
 assert.equal(OPENCODE_TOOLS.toCanonical('bash'), 'Bash');
@@ -260,6 +302,10 @@ const gateChecks = [
   ['a write naming Claude\'s key instead is refused', () => assert.equal(ask({ tool: 'write', args: { file_path: join(projectDir, 'x.ts') } }).allow, false)],
   ['bash with no command is refused', () => assert.equal(ask({ tool: 'bash', args: {} }).allow, false)],
   ['an unmapped tool is refused', () => assert.equal(ask({ tool: 'browser_click', args: {} }).allow, false)],
+  // Without this the skills wiring is dead on arrival: the environment points
+  // the member at its skills and then the gate refuses the tool that reads them.
+  ['loading an attached skill is permitted', () => assert.equal(ask({ tool: 'skill', args: { name: 'house-style' } }).allow, true)],
+  ['and for a read-only member too', () => assert.equal(ask({ tool: 'skill', args: { name: 'house-style' }, member: 'pat' }).allow, true)],
   ['the sub-agent tool is refused', () => assert.equal(ask({ tool: 'task', args: {} }).allow, false)],
   ['spawning another agent via bash is refused', () => assert.equal(ask({ tool: 'bash', args: { command: 'opencode run "anything"' } }).allow, false)],
   ['an ordinary command is permitted', () => assert.equal(ask({ tool: 'bash', args: { command: 'npm test' } }).allow, true)],

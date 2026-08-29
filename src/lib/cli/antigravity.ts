@@ -6,12 +6,39 @@
  * `scripts/probe-antigravity.mjs` and the fixtures beside it.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+
 import { createAntigravityDecoder } from './antigravity-decoder.ts';
 import { ANTIGRAVITY_TOOLS } from './antigravity-tools.ts';
 import { clampEffort, hasValue, resolvePermissionMode } from './args.ts';
 import type { AgentCli, CliModel, PathLayout, SpawnRequest } from './types.ts';
 import type { MemberPermissionMode } from '../team/types.ts';
 import { TURN_IDLE_TIMEOUT_MS } from '../pipeline-runtime.ts';
+
+/**
+ * Put the member's role where agy cannot ignore it: in the prompt.
+ *
+ * Every other route was tried against the binary and silently did nothing —
+ * `--agent <path>`, `--agent <name>` with a definition in `.agents/agents/`,
+ * and there is no `--system-prompt-file`. All three exit 0 and answer as a
+ * generic assistant. This one was verified the same way, and does apply.
+ *
+ * The costs are real and worth naming: the role is re-sent on every turn
+ * rather than held once, and it arrives as user text rather than as a system
+ * instruction, so a determined prompt could argue with it. Both beat a member
+ * that has no role at all and no way to tell.
+ */
+function prependRole(request: SpawnRequest, layout: PathLayout): string {
+  let role = '';
+  if (hasValue(layout.roleFile) && existsSync(layout.roleFile)) {
+    role = readFileSync(layout.roleFile, 'utf8');
+  } else if (hasValue(request.systemPrompt)) {
+    role = request.systemPrompt;
+  }
+
+  if (!role.trim()) return request.prompt;
+  return `${role.trim()}\n\n---\n\n${request.prompt}`;
+}
 
 /**
  * How long agy may spend on one turn before killing it itself.
@@ -89,12 +116,23 @@ export const antigravityCli: AgentCli = {
     // --json-schema is real, and under stream-json it applies to the final
     // result, which is exactly the verdict channel.
     structuredOutput: 'native',
-    // No --system-prompt-file. The role has to be written into the project as
-    // an agent definition, which puts it where every member can read it.
-    systemPrompt: 'generated-agent',
-    // No --plugin-dir either, so the active member's skills are written into
-    // the project immediately before it spawns.
-    skills: 'project-materialised',
+    // No --system-prompt-file, and the documented alternatives do not work on
+    // this build: `--agent <path>` is accepted, changes nothing and reports no
+    // error, and a definition under `.agents/agents/` is never discovered. A
+    // member relying on either ran as a generic assistant with no role, which
+    // is the worst shape a failure can take — it answers, plausibly, as nobody
+    // in particular. The role therefore rides in the prompt, which cannot be
+    // ignored. See prependRole.
+    systemPrompt: 'in-prompt',
+    // Nothing under `.agents/` is discovered on agy 1.1.22 — not
+    // `.agents/skills/`, not the `.agents/skills.json` its own documentation
+    // describes. Measured in a clean repo with the files in place before the
+    // first run, so it is neither staleness nor a cache. The only directory
+    // that does load is `~/.gemini/config/skills/`, which is global and the
+    // USER's: writing a member's skills there would collide with the user's own
+    // by name, leak between members, and outlive the run. Refused rather than
+    // done badly; the run warns instead of silently dropping the attachment.
+    skills: 'unsupported',
     // Confirmed by probe: a resumed turn could answer a question about turn
     // one without using a tool.
     resumeReplaysTranscript: true,
@@ -118,15 +156,23 @@ export const antigravityCli: AgentCli = {
     const { modelId } = resolveAntigravityModel(request.model, request.effort);
 
     const args: string[] = [
-      '--print', request.prompt,
+      '--print', prependRole(request, layout),
       '--output-format', 'stream-json',
       '--model', modelId,
       // Named explicitly so agy cannot infer a different project root than the
       // one everything else in the run is working against.
       '--add-dir', request.projectDir,
       '--print-timeout', `${PRINT_TIMEOUT_MINUTES}m`,
-      // A slash command could reach a subagent, which no member may spawn.
-      '--disable-slash-commands',
+      // `--disable-slash-commands` is deliberately NOT passed, though it was.
+      // It was here to stop a slash command reaching a subagent — but agy warns
+      // that "--mode plan has no effect while slash command expansion is
+      // disabled", so a member set to plan mode was silently not in plan mode,
+      // and its own --help says the flag also disables skill expansion.
+      //
+      // It was buying nothing either: every subagent tool agy offers maps to
+      // `Agent` in the vocabulary, and the gate refuses `Agent` for every
+      // member unconditionally. Enforcement stays where it can be tested,
+      // rather than in a flag that quietly turns off two other things.
     ];
 
     // Effort rides in the model id (see resolveAntigravityModel), so --effort
@@ -147,9 +193,10 @@ export const antigravityCli: AgentCli = {
       args.push('--mode', 'accept-edits');
     }
 
-    // The role is carried by a generated agent definition rather than a flag;
-    // `roleFile` is written into the project before the spawn and named here.
-    if (hasValue(layout.roleFile)) args.push('--agent', layout.roleFile);
+    // `--agent` is deliberately not passed. It takes the flag without
+    // complaint and then ignores it, so naming the role file here looked like
+    // role delivery and was nothing of the kind. The role goes in the prompt,
+    // above.
 
     if (hasValue(request.resume)) args.push('--conversation', request.resume);
     if (request.jsonSchema) args.push('--json-schema', JSON.stringify(request.jsonSchema));
