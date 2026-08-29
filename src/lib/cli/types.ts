@@ -226,4 +226,13 @@ export interface FetchedTurn {
    * which is not the same as zero — zero would silently bank a free turn.
    */
   usage?: TokenUsage;
+  /**
+   * Why the fetch came back empty, when it did.
+   *
+   * A failed fetch already fails closed, so this is not about safety — it is
+   * about the run being able to say what happened. Without it a member that
+   * worked for ten minutes reports no reply and no spend, and looks identical
+   * to one that did nothing.
+   */
+  error?: string;
 }

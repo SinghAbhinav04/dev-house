@@ -170,6 +170,67 @@ assert.equal(
   'not materialised into the project: nothing is copied, so nothing is left behind',
 );
 
+// ── Reading a finished turn back ─────────────────────────────────────
+//
+// `opencode export` is the ONLY source of both the reply and the spend on this
+// engine, so everything about a turn is lost if this call is. It was: read
+// through a pipe, the export arrived truncated at 65441 bytes, cut mid-token.
+// Truncated JSON does not parse, so the turn produced no verdict and no spend,
+// and a full build failed at the first gate with nothing in the log to explain
+// it. A big export is the case that must keep working.
+//
+// The race itself cannot be reproduced in-process — it is opencode exiting
+// before its stdout drains — so these drive a stub instead, and pin the two
+// things that broke: a large export must survive, and a failure must say so
+// rather than pass for a member that said nothing and cost nothing.
+
+{
+  const stubDir = mkdtempSync(join(tmpdir(), 'oc-export-'));
+  const bigSession = {
+    info: { id: 'ses_big', tokens: { input: 41237, output: 4540, reasoning: 0, cache: { read: 51278, write: 0 } }, cost: 0.08488672 },
+    messages: [
+      // Padding so the payload is comfortably past the size that used to be cut.
+      { info: { role: 'user' }, parts: [{ type: 'text', text: 'x'.repeat(200_000) }] },
+      { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'APPROVED' }] },
+    ],
+  };
+  writeFileSync(join(stubDir, 'payload.json'), JSON.stringify(bigSession));
+  writeFileSync(
+    join(stubDir, 'opencode'),
+    `#!/bin/sh\n/bin/cat "${join(stubDir, 'payload.json')}"\n`,
+    { mode: 0o755 },
+  );
+
+  // Prepended, not replacing: the stub has to win over a real `opencode` on
+  // this machine, while the shell it runs still needs its own PATH.
+  const path = process.env.PATH;
+  process.env.PATH = `${stubDir}:${path}`;
+  try {
+    const big = openCodeCli.fetchTurnResult('ses_big', stubDir);
+    assert.equal(big.text, 'APPROVED', 'a 200KB export comes back whole, not cut at the pipe buffer');
+    assert.equal(big.usage.inputTokens, 41237, 'and its spend comes back with it');
+    assert.equal(big.usage.totalCostUsd, 0.08488672);
+    assert.equal(big.error, undefined);
+
+    // A CLI that fails must not look like a member with nothing to say.
+    writeFileSync(join(stubDir, 'opencode'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+    const failed = openCodeCli.fetchTurnResult('ses_big', stubDir);
+    assert.equal(failed.text, '');
+    assert.equal(failed.usage, undefined, 'unknown spend stays unknown rather than banking as free');
+    assert.ok(failed.error, 'and the run is told why');
+
+    // Output that is not JSON at all — which is what truncation looked like.
+    writeFileSync(join(stubDir, 'opencode'), '#!/bin/sh\n/bin/echo -n \'{"info":{"id":"ses\'\n', { mode: 0o755 });
+    const cut = openCodeCli.fetchTurnResult('ses_big', stubDir);
+    assert.equal(cut.text, '');
+    assert.equal(cut.usage, undefined);
+    assert.match(cut.error, /readable JSON/, 'a half-written export is reported, not silently empty');
+  } finally {
+    process.env.PATH = path;
+    rmSync(stubDir, { recursive: true, force: true });
+  }
+}
+
 // ── The vocabulary ───────────────────────────────────────────────────
 
 assert.equal(OPENCODE_TOOLS.toCanonical('bash'), 'Bash');

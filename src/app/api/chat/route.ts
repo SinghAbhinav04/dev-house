@@ -363,6 +363,7 @@ function streamClaude(
           lastResultText = fetched.text;
           if (lastResultText) appendEvent(eventsFile, agent, 'text', lastResultText);
           if (fetched.usage) recordFetchedUsage(fetched.usage);
+          if (fetched.error) appendEvent(eventsFile, agent, 'failure', `Could not read back the reply: ${fetched.error}`);
         } catch {
           // A reply that cannot be fetched stays empty rather than failing the
           // turn; the caller already handles an empty answer.

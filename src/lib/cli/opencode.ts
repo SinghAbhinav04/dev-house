@@ -13,7 +13,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createOpencodeDecoder } from './opencode-decoder.ts';
@@ -71,27 +72,49 @@ function readSessionUsage(info: unknown): TokenUsage | undefined {
 export function exportTurnResult(sessionId: string, cwd: string): FetchedTurn {
   if (!sessionId) return { text: '' };
 
+  // Collected through a FILE rather than a pipe, which is not fastidiousness.
+  //
+  // Piped, `opencode export` truncates: it exits before its stdout has drained,
+  // and the reader gets whatever made it through — measured at 65441 bytes of
+  // an answer that should have been larger, cut mid-token. It is a race, so it
+  // is worst on the exports that return quickly, and a slow 850KB export came
+  // back whole while a fast 65KB one did not. Truncated JSON does not parse, so
+  // the turn produced no verdict and no spend, and the run failed at the first
+  // gate with nothing to explain it. A file descriptor has no such limit.
+  const spool = join(tmpdir(), `hackeroom-export-${sessionId}-${process.pid}.json`);
   let raw: string;
+  let handle: number | undefined;
   try {
-    raw = execFileSync('opencode', ['export', sessionId], {
+    handle = openSync(spool, 'w');
+    execFileSync('opencode', ['export', sessionId], {
       cwd,
-      encoding: 'utf8',
-      timeout: 30_000,
-      maxBuffer: 32 * 1024 * 1024,
+      // Generous: this re-serialises the ENTIRE conversation every turn, so it
+      // slows as the session grows — 16.5s for an 850KB planning session.
+      timeout: 180_000,
+      stdio: ['ignore', handle, 'pipe'],
     });
-  } catch {
+    closeSync(handle);
+    handle = undefined;
+    raw = readFileSync(spool, 'utf8');
+  } catch (err) {
     // A verdict that cannot be fetched is not a verdict. Returning nothing
     // lets the gate treat it as unreadable, which fails closed. Usage stays
     // undefined rather than zero — an unknown spend must not bank as a free
-    // turn.
-    return { text: '' };
+    // turn. The reason is carried out so the run can say it happened instead
+    // of quietly reporting a member that said nothing and cost nothing.
+    if (handle !== undefined) {
+      try { closeSync(handle); } catch { /* already gone */ }
+    }
+    return { text: '', error: `could not read the session back: ${(err as Error).message}` };
+  } finally {
+    try { rmSync(spool, { force: true }); } catch { /* nothing to clean */ }
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { text: '' };
+    return { text: '', error: 'the exported session was not readable JSON' };
   }
 
   const usage = readSessionUsage((parsed as { info?: unknown })?.info);

@@ -1163,9 +1163,18 @@ async function runClaudeTurn(
             noteBudget(member);
             flush();
           }
-        } catch {
+
+          // Said out loud. On this engine the fetch is the ONLY source of both
+          // the reply and the spend, so when it fails the member looks like it
+          // sat there doing nothing for free. The run should not have to
+          // guess which of those two things happened.
+          if (fetched.error) {
+            emit(agent, state.currentPhase, 'failure', `Could not read back the turn: ${fetched.error}`);
+          }
+        } catch (err) {
           // A verdict that cannot be fetched stays empty, which every gate
           // now reads as unreadable — the safe direction.
+          emit(agent, state.currentPhase, 'failure', `Could not read back the turn: ${(err as Error).message}`);
         }
       }
 
