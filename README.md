@@ -242,8 +242,12 @@ node scripts/probe-opencode.mjs
 
 ## Honest state of things
 
-The Claude Code path is the one with mileage on it. The other two are newer:
+The Claude Code path is the one with the most mileage on it. The other two are
+newer:
 
+- OpenCode has been driven through a complete plan → code → test → audit build
+  with every member on it — planner, reviewer, coder, tester and auditor — and
+  the tool it produced passed its own 14 tests. Antigravity has not.
 - Attached skills reach Claude Code and OpenCode members. Antigravity cannot
   load them at all: on `agy` 1.1.22 nothing under `.agents/` is discovered — not
   `skills/`, not the `skills.json` its own docs describe — and the only
