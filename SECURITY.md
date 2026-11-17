@@ -120,3 +120,17 @@ Open an issue at
 <https://github.com/SinghAbhinav04/dev-house/issues>. If it is a genuine escape
 from the hook's guarantees rather than one of the known limitations above,
 please say so in the title and I will treat it as a priority.
+
+## Acknowledgements
+
+Thank you to the people who have read this code closely enough to find what
+was wrong with it.
+
+- **Julius Smith** ([@josmithiii](https://github.com/josmithiii)) — reported
+  and fixed four issues in
+  [#1](https://github.com/SinghAbhinav04/dev-house/pull/1): a member id from
+  `/api/team` reaching `rmSync` as a path (`../..` resolved to the home
+  directory); the gate allowing a tool call whose payload it had not read; a
+  member being able to write its own Bash approval grant in strict mode; and
+  Stop killing every headless Claude Code session on the machine rather than
+  only this run.
