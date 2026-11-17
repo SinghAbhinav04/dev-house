@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,6 +22,7 @@ const {
   removeMemberSkill,
   resolveModel,
   updateMember,
+  writeMemberRole,
   writeMemberSkill,
   writeRoster,
 } = await import('../src/lib/team/roster.ts');
@@ -210,6 +211,46 @@ assert.match(skillText, /Use 8px spacing\./, 'body is preserved');
 removeMemberSkill('reacty', 'ui-docs');
 assert.deepEqual(listMemberSkills('reacty'), [], 'skills can be detached');
 
+// ── Ids and skill names are path segments ────────────────────────────
+//
+// `/api/team` hands `body.id` and `body.name` to these helpers untouched, and
+// they end in a recursive delete or a write. A sibling of HACKEROOM_HOME's
+// `members/` stands in for "somewhere else on disk": every attempt below would
+// have removed it, or written into it, before the ids were checked.
+
+const outside = join(tempHome, 'outside');
+mkdirSync(outside, { recursive: true });
+writeFileSync(join(outside, 'keep.txt'), 'precious');
+
+assert.throws(
+  () => removeMember(readRoster(), '../outside', { deleteFiles: true }),
+  /Invalid member id/,
+  'a traversal id cannot be removed with its "files"'
+);
+assert.throws(
+  () => removeMember(readRoster(), '', { deleteFiles: true }),
+  /Invalid member id/,
+  'an empty id does not resolve to members/ itself'
+);
+assert.throws(
+  () => removeMemberSkill('reacty', '../../../../outside'),
+  /Invalid skill name/,
+  'a traversal skill name cannot be removed'
+);
+assert.throws(() => removeMemberSkill('../outside', 'keep.txt'), /Invalid member id/);
+assert.throws(() => removeMemberSkill('reacty', '..'), /Invalid skill name/, 'nor can the skills directory itself');
+assert.throws(() => writeMemberRole('../outside', 'attacker text'), /Invalid member id/, 'a role cannot be planted elsewhere');
+assert.throws(
+  () => writeMemberSkill('../outside', { name: 'x', description: 'd', body: 'b' }),
+  /Invalid member id/,
+  'nor a skill'
+);
+assert.throws(() => readMemberRole('../outside'), /Invalid member id/);
+
+assert.ok(existsSync(join(outside, 'keep.txt')), 'nothing outside members/ was removed');
+assert.ok(!existsSync(join(outside, 'role.md')), 'and nothing was written there');
+assert.ok(existsSync(memberRolePath('reacty')), 'while a real member is untouched');
+
 // ── removeMember ─────────────────────────────────────────────────────
 
 roster = removeMember(roster, 'sneaky');
@@ -227,7 +268,6 @@ assert.deepEqual(
 assert.equal(reloaded.teamModel, 'opus');
 
 // A corrupt team.json must not throw — it degrades to an empty roster.
-const { writeFileSync } = await import('node:fs');
 writeFileSync(join(tempHome, 'team.json'), '{ not json');
 assert.deepEqual(readRoster().members, [], 'corrupt roster reads as empty rather than throwing');
 

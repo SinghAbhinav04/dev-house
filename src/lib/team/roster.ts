@@ -69,7 +69,21 @@ export function membersDir(): string {
   return join(hackeroomHome(), 'members');
 }
 
+/**
+ * A member's directory. Every other member path is derived from this one, so
+ * this is the single place an id becomes a path segment - and the single place
+ * it is checked.
+ *
+ * The id reaches here straight from request bodies (`/api/team` passes
+ * `body.id` through untouched), and callers go on to `rmSync(..., {recursive})`
+ * and `writeFileSync` under the result. Unchecked, `../..` resolved to the
+ * user's home directory. Throwing rather than sanitising: an id that is not a
+ * slug names no member, so there is nothing correct to do with it.
+ */
 export function memberDir(id: string): string {
+  if (!isValidMemberId(id)) {
+    throw new Error(`Invalid member id "${id}" - use lowercase letters, digits and dashes (max 32 chars).`);
+  }
   return join(membersDir(), id);
 }
 
@@ -84,6 +98,23 @@ export function memberPluginDir(id: string): string {
 
 export function memberSkillsDir(id: string): string {
   return join(memberPluginDir(id), 'skills');
+}
+
+/** A skill directory name: one path segment, never starting with a dot. */
+const SKILL_DIR_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * One skill's directory, refusing any name that is not a single path segment.
+ *
+ * Same reasoning as `memberDir`: the name arrives from a request body and the
+ * result is removed recursively. No `/` and no leading dot means it cannot
+ * climb out of the member's `skills/` directory.
+ */
+export function memberSkillDir(id: string, skillName: string): string {
+  if (!SKILL_DIR_PATTERN.test(skillName)) {
+    throw new Error(`Invalid skill name "${skillName}".`);
+  }
+  return join(memberSkillsDir(id), skillName);
 }
 
 export function roleTemplatesDir(): string {
@@ -370,8 +401,11 @@ export function updateMember(roster: Roster, id: string, patch: Partial<TeamMemb
 
 export function removeMember(roster: Roster, id: string, options: { deleteFiles?: boolean } = {}): Roster {
   if (options.deleteFiles) {
+    // Resolved outside the try: an invalid id must stop the removal, not be
+    // swallowed along with an ordinary filesystem error.
+    const dir = memberDir(id);
     try {
-      rmSync(memberDir(id), { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     } catch {}
   }
 
@@ -510,7 +544,7 @@ export function writeMemberSkill(
   const slug = skill.name.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug) throw new Error(`Invalid skill name "${skill.name}".`);
 
-  const dir = join(memberSkillsDir(id), slug);
+  const dir = memberSkillDir(id, slug);
   mkdirSync(dir, { recursive: true });
 
   const frontmatter = ['---', `name: ${slug}`, `description: ${skill.description.replace(/\n/g, ' ').trim()}`, '---', ''].join('\n');
@@ -520,8 +554,10 @@ export function writeMemberSkill(
 }
 
 export function removeMemberSkill(id: string, skillName: string): void {
+  // Outside the try, so a traversal attempt is refused rather than swallowed.
+  const dir = memberSkillDir(id, skillName);
   try {
-    rmSync(join(memberSkillsDir(id), skillName), { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   } catch {}
 }
 

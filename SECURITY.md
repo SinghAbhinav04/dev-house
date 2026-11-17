@@ -29,6 +29,8 @@ them:
 | Slot artifacts have exactly one owner | This is what "the plan is locked" actually means |
 | A member absent from the manifest is denied everything | Unknown identity fails closed |
 | Any unhandled tool is denied | New tools are denied by default, not allowed by default |
+| A call with nothing on stdin is denied | The gate never permits what it could not read |
+| The run's control files (`pipeline-*.json` in a project root) are unwritable by every member | Nobody can write their own Bash approval grant, answer a pending approval, or edit the run state |
 
 Paths are resolved before checking: `..` is rejected outright, and directory
 and file symlinks are resolved so a link cannot point outside the jail.
