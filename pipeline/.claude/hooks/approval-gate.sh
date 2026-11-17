@@ -15,6 +15,8 @@
 #     could not read
 #   - writes to .claude/ are denied for every member (that is what stops an
 #     agent from editing this hook or its own permissions)
+#   - writes to the run's control files (pipeline-*.json in a project root) are
+#     denied for every member, so nobody can approve their own Bash command
 #   - every member whose write level is not "builds" is jailed to the active
 #     project root
 #   - the Agent tool is blocked for everyone (no recursive spawning)
@@ -269,6 +271,34 @@ case "$TOOL_NAME" in
         exit 2
         ;;
     esac
+
+    # Block writes to the run's own control files, for ALL members.
+    # Unconditional, for the same reason as the config directories above.
+    #
+    # They sit in the project root, where a member with project-wide write
+    # access could otherwise reach them, and each one is something this gate
+    # or the orchestrator trusts:
+    #
+    #   pipeline-approved-bash.json   the single-use Bash grant consumed below.
+    #                                 A member that can write it approves its
+    #                                 own command, which is strict mode gone.
+    #   pipeline-pending.json         the approval request and the user's
+    #                                 answer to it.
+    #   pipeline-events*.json         the run state, including the phase the
+    #                                 denyPhases check above reads.
+    #
+    # Matched on the lowercased name because the filesystem under ~/Builds is
+    # usually case-insensitive, and applied to any directory that is a pipeline
+    # project root, so a supervisor cannot do to a sibling project what the
+    # coder cannot do to its own.
+    FILENAME_CI=$(lower_path "$FILENAME")
+    FILE_DIR=$(dirname "$FILEPATH")
+    if [[ "$FILENAME_CI" == pipeline-*.json* ]]; then
+      if [ "$(lower_path "$FILE_DIR")" = "$PROJECT_ROOT_CI" ] || [ -f "$FILE_DIR/pipeline-events.json" ]; then
+        echo "BLOCKED: Cannot modify the run's control files" >&2
+        exit 2
+      fi
+    fi
 
     # ── Shared-memory inbox ──────────────────────────────────────────
     #
