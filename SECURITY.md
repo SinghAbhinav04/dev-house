@@ -72,6 +72,39 @@ your members do.
 parsed at all, the orchestrator treats it as approval and advances. A member
 that crashes mid-sentence can therefore look like an approval.
 
+## The local API
+
+The viewer talks to the server over an HTTP API that spawns agent sessions,
+edits the roster, starts and stops runs and answers approvals. **It has no
+authentication.** What stands in for one is that it answers a single caller:
+the page it serves, in a browser on the same machine.
+
+| Rule | What it stops |
+|---|---|
+| The server binds `127.0.0.1` (`npm run dev`, `npm start`) | Any other machine on the network reaching it at all |
+| The `Host` header must name loopback (`localhost`, `127.0.0.1`, `[::1]`) | A hostile site reading the roster or run state by pointing its own name at 127.0.0.1 (DNS rebinding) |
+| An `Origin` header must be this server's own origin | A page on another site, or another local app on another port, sending requests through your browser |
+| A request that changes anything must be `application/json` | A cross-origin form post or `text/plain` body, which a browser sends without asking first |
+| A `projectDir` in a request must be a directory directly inside `~/Builds` | A request steering an approval, a resume or an audit action at some other path |
+
+The first is in `package.json`. The next three are one function,
+`src/lib/request-guard.ts`, applied to every request by `src/proxy.ts`, so a
+route added later is covered without anyone remembering to cover it.
+`scripts/test-request-guard.mjs` tests the rules, and
+`scripts/probe-api-guard.mjs` fires the same requests at a running server.
+
+What this does not do:
+
+- **It is not authentication.** Any program running as you can call the API,
+  and so can any other user of the machine. A request with no `Origin` header,
+  which is what a script sends, is not checked for one.
+- **Starting the server another way gives the binding up.** `next dev` on its
+  own, or with `-H 0.0.0.0`, listens on every interface. The other rules still
+  apply, but do not rely on them alone.
+- **Reaching it from another machine is not supported**, and should not be
+  until there is authentication. Forward the port over SSH instead:
+  `ssh -L 3000:127.0.0.1:3000 <host>`.
+
 ## Modes
 
 **Fast** (default) — members with `bash: "safe"` run commands without asking.

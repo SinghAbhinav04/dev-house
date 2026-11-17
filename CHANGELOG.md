@@ -27,8 +27,47 @@ All four fixes below were reported and contributed by Julius Smith
   sessions in unrelated projects. It now signals the orchestrator's recorded
   process group and the chat turns this server started, and nothing else.
 
+The API has no authentication, and until now anything that could reach port
+3000 could use it. It now answers one caller: the page it serves, in a browser
+on the same machine.
+
+- **The server listens on 127.0.0.1 only.** `npm run dev` and `npm start`
+  used Next's default, which is every interface, so the app was reachable from
+  the whole network.
+- **Requests addressed to any other host are refused.** A Host header that is
+  not `localhost`, `127.0.0.1` or `[::1]` gets a 403, for pages as well as the
+  API. This is what stops a hostile site reading the roster or the run state by
+  pointing its own name at 127.0.0.1 (DNS rebinding).
+- **Requests from any other origin are refused.** An Origin header has to be
+  this server's own origin. The one route that checked before,
+  `/api/cli-providers`, accepted any localhost origin, so a page served by
+  another local app on another port could post to it.
+- **Requests that change anything must be `application/json`.** Every route
+  parsed its body as JSON whatever the Content-Type said, which let a page on
+  any site send one as `text/plain` with no preflight. Those now get a 415.
+- **A `projectDir` in a request has to be a project.** `/api/approve`,
+  `/api/resume-pipeline` and `/api/audit-action` used the path as given. It
+  must now resolve, through symlinks, to a directory directly inside
+  `~/Builds`.
+- **Stop always pauses the run.** It could throw if `pgrep` was missing, or if
+  the orchestrator exited between being found and being signalled, and that
+  left the run marked as running. It now pauses regardless and says in the run
+  log when it could not confirm the orchestrator has stopped.
+- **The gate refuses shell writes to the run's control files.** The Write and
+  Edit block on `pipeline-*.json` now has a Bash counterpart for the grant, the
+  pending approval and the run state. Reading them from a shell is still
+  allowed.
+
 ### Upgrading
 
 Stop any run in progress before upgrading. A run started on an older version
 has no recorded process group, so the new Stop pauses its state but cannot end
 its processes.
+
+The app can no longer be opened from another machine. To use it remotely,
+forward the port over SSH (`ssh -L 3000:127.0.0.1:3000 <host>`) and open
+`http://localhost:3000` as before.
+
+Anything scripted against the API has to send `Content-Type:
+application/json` on every POST, including ones with no body, such as
+`/api/stop-pipeline`.
