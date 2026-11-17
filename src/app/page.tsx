@@ -256,7 +256,7 @@ export default function PipelinePage() {
 
   async function handleReset() {
     if (isPipeline) {
-      await fetch('/api/stop-pipeline', { method: 'POST' });
+      await fetch('/api/stop-pipeline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     }
     await resetState();
     setPipelineStarted(false);

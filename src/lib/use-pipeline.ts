@@ -313,7 +313,7 @@ export function usePipelineState({ pollInterval = 1500, mode, model }: UsePipeli
   }, []);
 
   const stopPipeline = useCallback(async () => {
-    const res = await fetch('/api/stop-pipeline', { method: 'POST' });
+    const res = await fetch('/api/stop-pipeline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     return res.json();
   }, []);
 
