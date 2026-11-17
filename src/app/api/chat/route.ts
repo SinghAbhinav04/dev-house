@@ -20,6 +20,7 @@ import {
   setStopAfterReview,
   startPipelineRun,
   stopPipelineRun,
+  trackDirectTurn,
   type PermissionMode,
   type RunGoal,
   type SecurityMode,
@@ -231,7 +232,9 @@ function streamClaude(
   return new Promise<NextResponse>((resolveResponse) => {
     // From the adapter, so the member's own CLI decides how its stream is read.
     const decoder = resolveCli(opts.cli).createDecoder();
-    const child = runner.spawn(opts);
+    // Tracked so Stop can end this turn by handle. It used to find it by
+    // pattern-matching every process on the machine.
+    const child = trackDirectTurn(runner.spawn(opts));
     const canFallbackToHost = child.backend === 'docker' && runner.supportsHostFallback(opts);
 
     if (child.backend === 'docker') {

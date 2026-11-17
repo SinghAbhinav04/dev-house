@@ -1,5 +1,5 @@
-import { spawn, execFileSync, execSync } from 'child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'fs';
+import { spawn, execFileSync, type ChildProcess } from 'child_process';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 
@@ -86,6 +86,122 @@ export function appendPipelineEvent(
   writeJson(file, state);
 }
 
+// ── What "stop" is allowed to reach ──────────────────────────────────
+//
+// Stopping a run used to be two `pkill -f` patterns, one of them
+// `claude.*--output-format.*stream-json`. That matches every headless Claude
+// Code process on the machine: other projects, scheduled jobs, SDK-driven
+// sessions, anything. Pressing Stop in this app killed work that had nothing
+// to do with it.
+//
+// So stop now signals only what this app started, and it knows what that is
+// because it wrote it down:
+//
+//   - the orchestrator is spawned detached, which makes it the leader of its
+//     own process group, and every member turn it spawns inherits that group.
+//     The group id is recorded at spawn and the whole group is signalled.
+//   - direct chat turns are children of this server process, tracked in memory.
+
+/**
+ * Lives in `.claude/` because no member can write there. In the project root
+ * a coder could point it at any process group the user owns and have the next
+ * Stop signal that instead.
+ */
+export const ORCHESTRATOR_PID_FILE = 'orchestrator.pid';
+
+export function orchestratorPidPath(projectDir: string): string {
+  return join(projectDir, '.claude', ORCHESTRATOR_PID_FILE);
+}
+
+export function recordOrchestratorPid(projectDir: string, pid: number): void {
+  mkdirSync(join(projectDir, '.claude'), { recursive: true });
+  writeFileSync(orchestratorPidPath(projectDir), `${pid}\n`);
+}
+
+export function readOrchestratorPid(projectDir: string): number | null {
+  const file = orchestratorPidPath(projectDir);
+  if (!existsSync(file)) return null;
+
+  const pid = Number(readFileSync(file, 'utf8').trim());
+  // Never 0 or 1 or anything negative: as a group id those mean "my own
+  // group" and "everything I am allowed to signal".
+  return Number.isInteger(pid) && pid > 1 ? pid : null;
+}
+
+/**
+ * Whether a process group is still an orchestrator.
+ *
+ * A recorded id outlives the run it belonged to, and ids are reused. Signalling
+ * a stale one would hit whatever unrelated group inherited the number, so the
+ * group has to still contain the thing we started before it is touched.
+ *
+ * `pgrep -g` rather than reading the whole process table out of `ps`: the
+ * table on a busy machine runs past execFileSync's output buffer, and the
+ * question only ever concerns one group.
+ */
+export function isOrchestratorGroup(pgid: number): boolean {
+  try {
+    execFileSync('pgrep', ['-g', String(pgid), '-f', 'orchestrator\\.ts'], { stdio: 'ignore' });
+    return true;
+  } catch (err) {
+    // 1 is pgrep saying nothing matched. Anything else is pgrep itself
+    // failing, which must not be read as "the run has already gone".
+    if ((err as { status?: number }).status === 1) return false;
+    throw err;
+  }
+}
+
+/** Signal the orchestrator this project recorded, and only that. */
+function stopOrchestrator(projectDir: string): boolean {
+  const pgid = readOrchestratorPid(projectDir);
+  if (pgid === null) {
+    console.warn(`*** No orchestrator is recorded for ${projectDir}, so nothing was signalled.`);
+    return false;
+  }
+
+  const running = isOrchestratorGroup(pgid);
+
+  if (running) {
+    // Negative: the whole group, which is the orchestrator and every member
+    // turn it has in flight.
+    process.kill(-pgid, 'SIGTERM');
+  } else {
+    console.warn(`*** Process group ${pgid} recorded for ${projectDir} is no longer an orchestrator; not signalled.`);
+  }
+
+  rmSync(orchestratorPidPath(projectDir), { force: true });
+  return running;
+}
+
+type DirectTurn = Pick<ChildProcess, 'kill' | 'on'>;
+
+/**
+ * On globalThis rather than at module scope: each route is bundled separately,
+ * so the chat route and the stop route would otherwise each get their own
+ * empty set.
+ */
+const DIRECT_TURNS = Symbol.for('hackeroom.directTurns');
+
+function directTurns(): Set<DirectTurn> {
+  const store = globalThis as unknown as Record<symbol, Set<DirectTurn> | undefined>;
+  return (store[DIRECT_TURNS] ??= new Set<DirectTurn>());
+}
+
+/** Remember a chat turn this server spawned, so Stop can end it by handle. */
+export function trackDirectTurn<T extends DirectTurn>(child: T): T {
+  const turns = directTurns();
+  turns.add(child);
+  child.on('close', () => turns.delete(child));
+  child.on('error', () => turns.delete(child));
+  return child;
+}
+
+function stopDirectTurns(): number {
+  const turns = [...directTurns()];
+  for (const child of turns) child.kill('SIGTERM');
+  return turns.length;
+}
+
 function spawnOrchestrator(projectDir: string, securityMode: SecurityMode, aSession?: string, permissionMode?: PermissionMode) {
   const orchestratorPath = join(BUILDUI_DIR, 'orchestrator.ts');
   const args = ['tsx', orchestratorPath, '--project-dir', projectDir];
@@ -104,6 +220,10 @@ function spawnOrchestrator(projectDir: string, securityMode: SecurityMode, aSess
   child.stdout?.on('data', (data) => process.stdout.write(data));
   child.stderr?.on('data', (data) => process.stderr.write(data));
   child.unref();
+
+  // `detached` made this child the leader of a new process group, so its pid
+  // is the id of the group that Stop will signal.
+  if (child.pid !== undefined) recordOrchestratorPid(projectDir, child.pid);
 }
 
 export function startPipelineRun(options: {
@@ -386,12 +506,13 @@ export function startAuditAction(
 }
 
 export function stopPipelineRun(projectDir?: string): { success: boolean; projectDir?: string } {
-  try {
-    execSync('pkill -f "tsx.*orchestrator\\.ts" 2>/dev/null || true', { encoding: 'utf8' });
-    execSync('pkill -f "claude.*--output-format.*stream-json" 2>/dev/null || true', { encoding: 'utf8' });
-  } catch {}
-
   const resolvedProjectDir = projectDir || findLatestProject() || undefined;
+
+  // By handle and by recorded group, never by matching command lines: see the
+  // note above stopOrchestrator.
+  stopDirectTurns();
+  if (resolvedProjectDir) stopOrchestrator(resolvedProjectDir);
+
   if (resolvedProjectDir) {
     const file = join(resolvedProjectDir, 'pipeline-events.json');
     const state = readJson(file);
