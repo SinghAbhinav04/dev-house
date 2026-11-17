@@ -11,6 +11,8 @@
 # of authority. These clamps are unconditional and no manifest value can unlock
 # them:
 #
+#   - a call with nothing on stdin is denied; the gate never permits what it
+#     could not read
 #   - writes to .claude/ are denied for every member (that is what stops an
 #     agent from editing this hook or its own permissions)
 #   - every member whose write level is not "builds" is jailed to the active
@@ -37,15 +39,23 @@
 #
 
 # Claude can occasionally invoke the hook in a context where stdin is not
-# closed yet. Avoid hanging forever on an empty bootstrap/probe invocation.
+# closed yet, so the first read is bounded rather than left to hang forever.
 # Read a single byte first so JSON payloads without a trailing newline still
 # count as real input instead of timing out.
-if IFS= read -r -t 1 -n 1 FIRST_CHAR; then
+#
+# No input is a REFUSAL. This branch used to print "allow" after one second,
+# which made the gate fail open exactly when it could not see what it was
+# judging: a payload that arrived late on a loaded machine was permitted
+# unread, with no member identity checked and no path looked at. Nothing has
+# been parsed at this point, so there is no call here that could be known to
+# be safe. The wait is long because a late payload now costs a denied tool
+# call instead of an unchecked one, and an EOF still returns at once.
+if IFS= read -r -t 10 -n 1 FIRST_CHAR; then
   REST=$(cat)
   INPUT="${FIRST_CHAR}${REST}"
 else
-  echo '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}'
-  exit 0
+  echo "BLOCKED: No tool call was received on stdin" >&2
+  exit 2
 fi
 
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name')

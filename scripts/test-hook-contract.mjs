@@ -103,6 +103,33 @@ function invokeHook({ agent, toolName, toolInput = {}, cwd = projectDir, securit
   };
 }
 
+/**
+ * Hand the hook exactly these bytes, optionally after a delay.
+ *
+ * `invokeHook` always sends a well-formed payload at once, which is the one
+ * case the stdin handling cannot get wrong. What it used to get wrong was the
+ * other two: nothing at all, and a payload that shows up late.
+ */
+function invokeHookRaw({ agent = 'reacty', input = '', delaySeconds = 0 }) {
+  const env = { ...process.env, HOME: tempHome, PIPELINE_SECURITY_MODE: 'fast', HOOK: hookPath, PAYLOAD: input };
+  if (agent === undefined) {
+    delete env.PIPELINE_AGENT;
+  } else {
+    env.PIPELINE_AGENT = agent;
+  }
+
+  const result =
+    delaySeconds > 0
+      ? spawnSync('bash', ['-c', `(sleep ${delaySeconds}; printf '%s' "$PAYLOAD") | bash "$HOOK"`], { encoding: 'utf8', env })
+      : spawnSync('bash', [hookPath], { input, encoding: 'utf8', env });
+
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+  };
+}
+
 function getDecision(stdout) {
   if (!stdout) return null;
   try {
@@ -167,6 +194,43 @@ const checks = [
     name: 'unrecognised write level in manifest is denied, not treated as permissive',
     expect: 'deny',
     run: () => invokeHook({ agent: 'broken', toolName: 'Write', toolInput: { file_path: 'index.html', content: 'x' } }),
+  },
+
+  // ── Nothing to judge ───────────────────────────────────────────────
+  //
+  // The gate used to answer "allow" whenever its first byte took more than a
+  // second to arrive, before it had read a tool name, a member or a path.
+  {
+    name: 'an empty stdin is denied, not waved through',
+    expect: 'deny',
+    run: () => invokeHookRaw({ input: '' }),
+  },
+  {
+    name: 'an empty stdin from nobody in particular is denied too',
+    expect: 'deny',
+    run: () => invokeHookRaw({ agent: undefined, input: '' }),
+  },
+  {
+    name: 'a payload that arrives late is still judged, and still refused',
+    expect: 'deny',
+    run: () =>
+      invokeHookRaw({
+        delaySeconds: 2,
+        input: JSON.stringify({
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, '.claude', 'settings.json'), content: '{}' },
+          cwd: projectDir,
+        }),
+      }),
+  },
+  {
+    name: 'a late payload that is permitted is still permitted',
+    expect: 'allow',
+    run: () =>
+      invokeHookRaw({
+        delaySeconds: 2,
+        input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: 'plan.md' }, cwd: projectDir }),
+      }),
   },
 
   // ── Read-only tools ────────────────────────────────────────────────
