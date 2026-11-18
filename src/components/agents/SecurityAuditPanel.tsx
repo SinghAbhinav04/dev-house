@@ -45,6 +45,8 @@ interface Props {
   onSendToC: (findingId: string) => void;
   onDismiss: (findingId: string) => void;
   onDeploy: () => void;
+  /** Which grid column the panel takes; the office page pins it to the last. */
+  gridColumn?: string;
   onSendChat: (msg: string) => void;
 }
 
@@ -75,6 +77,7 @@ export function SecurityAuditPanel({
   onDismiss,
   onDeploy,
   onSendChat,
+  gridColumn,
 }: Props) {
   const [chatInput, setChatInput] = useState('');
   const [showDeployConfirm, setShowDeployConfirm] = useState(false);
@@ -120,7 +123,7 @@ export function SecurityAuditPanel({
       className={`flex cursor-pointer flex-col overflow-hidden transition-colors ${
         isSelected ? 'bg-[var(--surface-sunken)]' : 'bg-[var(--surface-sunken)] hover:bg-[var(--surface-sunken)]'
       }`}
-      style={{ gridRow: '1 / -1' }}
+      style={{ gridRow: '1 / -1', gridColumn }}
     >
       {/* Header */}
       <div className={`flex items-center gap-3 border-b-2 px-3.5 py-2.5 ${

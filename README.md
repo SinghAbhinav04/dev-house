@@ -222,7 +222,7 @@ scripts/           the test suite, the probes, and the team CLI
 ## Tests
 
 ```bash
-npm test          # 22 suites
+npm test          # 23 suites
 npm run typecheck
 npm run lint
 ```
