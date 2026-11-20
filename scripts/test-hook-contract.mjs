@@ -589,6 +589,49 @@ const checks = [
     expect: 'deny',
     run: () => invokeHook({ agent: 'trusted', toolName: 'Bash', toolInput: { command: 'claude --version' }, securityMode: 'fast' }),
   },
+
+  // The run's control files, from a shell. Writing one is refused; reading
+  // one is not, because the supervisor is told to and nothing in them is a
+  // secret from the run's own members.
+  ...[
+    ['redirecting into the Bash grant', `echo '{"agent":"trusted","command":"x"}' > pipeline-approved-bash.json`],
+    ['appending to it', 'echo x >> ./pipeline-approved-bash.json'],
+    ['a quoted, absolute path to it', `printf '{}' > "${projectDir}/pipeline-approved-bash.json"`],
+    ['the noclobber-override redirect', 'echo x >| pipeline-pending.json'],
+    ['a different capitalisation', 'echo x > Pipeline-Pending.JSON'],
+    ['tee', 'echo x | tee pipeline-pending.json'],
+    ['removing the run state', 'rm -f pipeline-events.json'],
+    ['editing it in place', `sed -i 's/running/paused/' pipeline-events.json`],
+    ['overwriting an archived slice', 'cp /tmp/x pipeline-events.3.json'],
+    ['dd', 'dd if=/dev/null of=pipeline-approved-bash.json'],
+  ].map(([what, command]) => ({
+    name: `bash:all cannot write a control file by ${what}`,
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'trusted', toolName: 'Bash', toolInput: { command }, securityMode: 'fast' }),
+  })),
+  ...[
+    ['cat', 'cat pipeline-events.json'],
+    ['jq', 'jq .currentPhase pipeline-events.json'],
+    ['an input redirect', 'jq .currentPhase < pipeline-events.json'],
+    ['grep', 'grep -c tool_call pipeline-events.json'],
+    ['a read whose output goes elsewhere', 'jq .events pipeline-events.json > /tmp/events.json'],
+    ['a pipeline that ends in a redirect', 'cat pipeline-events.json | jq .usage > usage.json'],
+  ].map(([what, command]) => ({
+    name: `the run state can still be read with ${what}`,
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Bash', toolInput: { command }, securityMode: 'fast' }),
+  })),
+  {
+    name: "a file of the coder's own that merely has such a name is not caught",
+    expect: 'allow',
+    run: () =>
+      invokeHook({
+        agent: 'reacty',
+        toolName: 'Bash',
+        securityMode: 'fast',
+        toolInput: { command: 'echo {} > src/pipeline-config.json && rm src/pipeline-config.json' },
+      }),
+  },
   {
     name: 'bash:all still cannot reassign PIPELINE_AGENT',
     expect: 'deny',

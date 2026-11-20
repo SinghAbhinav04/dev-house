@@ -10,7 +10,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -41,6 +41,7 @@ const {
   orchestratorPidPath,
   readOrchestratorPid,
   recordOrchestratorPid,
+  signalOrchestratorGroup,
   stopPipelineRun,
   trackDirectTurn,
 } = await import('../src/lib/pipeline-control.ts');
@@ -59,13 +60,23 @@ function writeRunningState() {
 const IDLE = 'setInterval(() => {}, 1000)';
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
+/**
+ * Running - as opposed to dead and not yet collected.
+ *
+ * A killed process stays in the process table as a zombie until its parent
+ * reaps it, and `kill(pid, 0)` still succeeds on one. The member turn here is
+ * an orphan once its orchestrator dies, so it is reaped by init - and in a
+ * container started without one, by nobody, ever. Asking the signal alone
+ * made this suite hang there on a process that had in fact been stopped.
+ */
 function isAlive(pid) {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  const state = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim();
+  return state !== '' && !state.startsWith('Z');
 }
 
 async function waitFor(condition, what, timeoutMs = 8000) {
@@ -163,6 +174,56 @@ try {
   assert.equal(stopped.pipelineStatus, 'paused');
   assert.equal(stopped.agentStatus.reacty, 'idle');
   assert.equal(stopped.events.at(-1).text, 'Pipeline stopped by user');
+  assert.equal(result.warning, undefined, 'a clean stop carries no warning');
+
+  // ── Stop pauses the run even when it cannot signal ─────────────────
+  //
+  // Stop used to throw out of the middle of itself in two cases, and a throw
+  // there left the run marked as running with the orchestrator's fate
+  // unknown. Neither may stop the state from being updated.
+
+  // The group exits between being found and being signalled: a run that
+  // finishes as Stop is pressed. A group of one process that has exited and
+  // been reaped is certainly gone - unlike the orchestrator's above, which in
+  // a container with no init still holds its unreaped member.
+  const gone = spawn(process.execPath, ['-e', ''], { detached: true, stdio: 'ignore' });
+  await exited(gone);
+  assert.equal(signalOrchestratorGroup(gone.pid), false, 'signalling a group that has gone is not an error');
+
+  // pgrep is not installed, so the group cannot be checked at all.
+  const { child: unchecked } = spawnOrchestratorStandIn();
+  recordOrchestratorPid(projectDir, unchecked.pid);
+  writeRunningState();
+
+  const realPath = process.env.PATH;
+  const emptyBin = join(tempRoot, 'empty-bin');
+  mkdirSync(emptyBin, { recursive: true });
+  process.env.PATH = emptyBin;
+  let blind;
+  try {
+    blind = stopPipelineRun(projectDir);
+  } finally {
+    process.env.PATH = realPath;
+  }
+
+  assert.equal(blind.success, true, 'Stop still returns');
+  assert.match(blind.warning, /pgrep is not installed/, 'and says what it could not do');
+  assert.match(blind.warning, new RegExp(`process group ${unchecked.pid}`), 'and what may still be running');
+
+  const blindState = JSON.parse(readFileSync(eventsFile, 'utf8'));
+  assert.equal(blindState.pipelineStatus, 'paused', 'the run is paused regardless');
+  assert.equal(blindState.agentStatus.reacty, 'idle');
+  assert.equal(blindState.events.at(-1).type, 'failure', 'the run log carries the warning');
+  assert.match(blindState.events.at(-1).text, /may still be running/);
+  assert.ok(isAlive(unchecked.pid), 'a group that could not be verified is not signalled');
+  assert.equal(readOrchestratorPid(projectDir), unchecked.pid, 'and its record is kept, so the next Stop can try again');
+
+  // With pgrep back, that next Stop finishes the job.
+  const uncheckedExit = exited(unchecked);
+  writeRunningState();
+  assert.equal(stopPipelineRun(projectDir).warning, undefined);
+  await uncheckedExit;
+  assert.ok(!existsSync(orchestratorPidPath(projectDir)));
 
   // ── A stale record signals nobody ──────────────────────────────────
   //

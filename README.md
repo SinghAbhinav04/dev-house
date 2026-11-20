@@ -222,7 +222,7 @@ scripts/           the test suite, the probes, and the team CLI
 ## Tests
 
 ```bash
-npm test          # 22 suites
+npm test          # 24 suites
 npm run typecheck
 npm run lint
 ```
@@ -236,6 +236,7 @@ The probes that captured them are checked in too:
 ```bash
 node scripts/probe-antigravity.mjs    # spawns real turns; spends tokens
 node scripts/probe-opencode.mjs
+node scripts/probe-api-guard.mjs      # needs a running server; spends nothing
 ```
 
 ---

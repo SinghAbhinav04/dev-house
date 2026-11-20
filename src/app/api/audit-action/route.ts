@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { startAuditAction, type AuditAction } from '@/lib/pipeline-control';
+import { projectDirFromRequest } from '@/lib/project-dir';
 
 const VALID_ACTIONS: AuditAction[] = ['send-to-c', 'dismiss', 'deploy'];
 
@@ -16,9 +17,13 @@ export async function POST(req: NextRequest) {
     if (typeof body?.findingId === 'string' && body.findingId.length > 0) {
       findingId = body.findingId;
     }
-    if (typeof body?.projectDir === 'string' && body.projectDir.length > 0) {
-      projectDir = body.projectDir;
+    // An audit action spawns an orchestrator in the directory, so a named
+    // project has to be one.
+    const choice = projectDirFromRequest(body?.projectDir);
+    if (!choice.ok) {
+      return NextResponse.json({ success: false, error: choice.error }, { status: 400 });
     }
+    projectDir = choice.projectDir;
   } catch {}
 
   if (!action) {

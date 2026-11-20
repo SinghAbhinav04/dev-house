@@ -152,25 +152,66 @@ export function isOrchestratorGroup(pgid: number): boolean {
 }
 
 /** Signal the orchestrator this project recorded, and only that. */
-function stopOrchestrator(projectDir: string): boolean {
+/**
+ * Send SIGTERM to a whole process group: the orchestrator and every member
+ * turn it has in flight. Returns whether there was anything left to signal.
+ *
+ * The group can exit between being found and being signalled - a run that
+ * finishes as Stop is pressed does exactly that - and the kill then fails with
+ * ESRCH. That is the outcome Stop wanted, so it is not an error.
+ */
+export function signalOrchestratorGroup(pgid: number): boolean {
+  try {
+    // Negative: the group, not the one process.
+    process.kill(-pgid, 'SIGTERM');
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    throw err;
+  }
+}
+
+function describeFailure(err: unknown): string {
+  const failure = err as NodeJS.ErrnoException & { path?: string };
+  if (failure.code === 'ENOENT' && failure.path === 'pgrep') return 'pgrep is not installed';
+  return failure.message || String(err);
+}
+
+/**
+ * Signal the orchestrator this project recorded, and only that.
+ *
+ * Never throws. Returns a sentence describing what went wrong when the
+ * orchestrator may still be running, and null otherwise. Stop has to finish
+ * pausing the run whatever happens here: a Stop that threw half-way left the
+ * run marked as running with nothing to press.
+ */
+function stopOrchestrator(projectDir: string): string | null {
   const pgid = readOrchestratorPid(projectDir);
   if (pgid === null) {
     console.warn(`*** No orchestrator is recorded for ${projectDir}, so nothing was signalled.`);
-    return false;
+    return null;
   }
 
-  const running = isOrchestratorGroup(pgid);
+  let running: boolean;
+  try {
+    running = isOrchestratorGroup(pgid);
+  } catch (err) {
+    // The record is kept, so a later Stop can try again once the cause is fixed.
+    return `Could not check whether the orchestrator is still running (${describeFailure(err)}), so it was not signalled. It may still be running as process group ${pgid}.`;
+  }
 
   if (running) {
-    // Negative: the whole group, which is the orchestrator and every member
-    // turn it has in flight.
-    process.kill(-pgid, 'SIGTERM');
+    try {
+      signalOrchestratorGroup(pgid);
+    } catch (err) {
+      return `Could not signal the orchestrator (${describeFailure(err)}). It may still be running as process group ${pgid}.`;
+    }
   } else {
     console.warn(`*** Process group ${pgid} recorded for ${projectDir} is no longer an orchestrator; not signalled.`);
   }
 
   rmSync(orchestratorPidPath(projectDir), { force: true });
-  return running;
+  return null;
 }
 
 type DirectTurn = Pick<ChildProcess, 'kill' | 'on'>;
@@ -198,7 +239,13 @@ export function trackDirectTurn<T extends DirectTurn>(child: T): T {
 
 function stopDirectTurns(): number {
   const turns = [...directTurns()];
-  for (const child of turns) child.kill('SIGTERM');
+  for (const child of turns) {
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // Already gone. Its close handler removes it from the set.
+    }
+  }
   return turns.length;
 }
 
@@ -505,13 +552,14 @@ export function startAuditAction(
   return { success: true, projectDir: resolvedProjectDir };
 }
 
-export function stopPipelineRun(projectDir?: string): { success: boolean; projectDir?: string } {
+export function stopPipelineRun(projectDir?: string): { success: boolean; projectDir?: string; warning?: string } {
   const resolvedProjectDir = projectDir || findLatestProject() || undefined;
 
   // By handle and by recorded group, never by matching command lines: see the
   // note above stopOrchestrator.
   stopDirectTurns();
-  if (resolvedProjectDir) stopOrchestrator(resolvedProjectDir);
+  const problem = resolvedProjectDir ? stopOrchestrator(resolvedProjectDir) : null;
+  if (problem) console.warn(`*** ${problem}`);
 
   if (resolvedProjectDir) {
     const file = join(resolvedProjectDir, 'pipeline-events.json');
@@ -537,10 +585,22 @@ export function stopPipelineRun(projectDir?: string): { success: boolean; projec
         type: 'status',
         text: 'Pipeline stopped by user',
       });
+      if (problem) {
+        // Said in the run log as well as the console: the run is marked
+        // paused either way, and it would be wrong to let that read as
+        // "nothing is running" when it could not be confirmed.
+        events.push({
+          time: new Date().toISOString(),
+          agent: 'system',
+          phase: String(state.currentPhase || 'concept'),
+          type: 'failure',
+          text: problem,
+        });
+      }
       state.events = events;
       writeJson(file, state);
     }
   }
 
-  return { success: true, projectDir: resolvedProjectDir };
+  return { success: true, projectDir: resolvedProjectDir, ...(problem ? { warning: problem } : {}) };
 }

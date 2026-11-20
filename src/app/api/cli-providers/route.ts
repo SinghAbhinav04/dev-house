@@ -5,6 +5,7 @@ import {
   disconnectProvider,
   opencodeProviders,
 } from '@/lib/cli/opencode-providers';
+import { checkRequest } from '@/lib/request-guard';
 
 /**
  * Providers a member can be pointed at, and connecting one.
@@ -28,18 +29,15 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   // This route accepts a credential, so it only answers to the page it ships
-  // with. Hackeroom binds to localhost, but a page on another origin can still
-  // reach localhost from your browser.
-  const origin = request.headers.get('origin');
-  if (origin) {
-    try {
-      const host = new URL(origin).hostname;
-      if (host !== 'localhost' && host !== '127.0.0.1') {
-        return NextResponse.json({ error: 'Cross-origin requests are not accepted here.' }, { status: 403 });
-      }
-    } catch {
-      return NextResponse.json({ error: 'Bad origin.' }, { status: 403 });
-    }
+  // with. Every request already passes this check in src/proxy.ts; it is
+  // repeated here, with the same function, because this is the one route
+  // where a proxy that was ever misconfigured or bypassed would cost a key.
+  //
+  // The check that used to live here accepted any localhost origin, so a page
+  // served by some other local app on another port could post to it.
+  const verdict = checkRequest(request);
+  if (!verdict.ok) {
+    return NextResponse.json({ error: verdict.error }, { status: verdict.status });
   }
 
   let body: Record<string, unknown>;

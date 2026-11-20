@@ -392,6 +392,32 @@ if [ "$TOOL_NAME" = "Bash" ]; then
     exit 2
   fi
 
+  # The run's own control files: the Bash side of the Write/Edit clamp above.
+  #
+  # Named one by one rather than as pipeline-*.json. The Write clamp can tell
+  # a project root from a subdirectory; a pattern over a command string
+  # cannot, and a coder is entitled to a src/pipeline-config.json of its own.
+  #
+  # WRITES only, on purpose. Reading one (`cat`, `jq`, `grep`, `< file`) stays
+  # allowed: the supervisor's role tells it to read pipeline-events.json, and
+  # nothing in these files is a secret from the members of the run. So the
+  # redirect check below looks for `>` followed by the file, never for `<`.
+  #
+  # Like every Bash rule here this is a pattern match and a guardrail. Where
+  # it matters most - a member whose Bash needs approval - the command is
+  # shown to the user before it runs.
+  RUN_FILES='pipeline-(approved-bash|approved|pending|events)(\.[0-9]+)?\.json'
+
+  if printf '%s\n' "$COMMAND" | grep -Eiq "(^|[;&|[:space:]])(rm|mv|cp|chmod|chown|touch|sed|tee|dd|truncate)\b.*($RUN_FILES)"; then
+    echo "BLOCKED: Cannot modify the run's control files via Bash" >&2
+    exit 2
+  fi
+
+  if printf '%s\n' "$COMMAND" | grep -Eiq ">[|&]?[[:space:]]*[\"']?[^[:space:]<>|;&]*($RUN_FILES)"; then
+    echo "BLOCKED: Cannot modify the run's control files via Bash" >&2
+    exit 2
+  fi
+
   # Block mv/cp/rm with any glob that could target .claude (e.g., .c*, .cl*)
   # Block these commands entirely when they contain glob wildcards near dot-files
   case "$COMMAND" in
