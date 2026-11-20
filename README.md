@@ -242,9 +242,10 @@ node scripts/probe-api-guard.mjs      # needs a running server; spends nothing
 ### CI and releases
 
 Every push to `main` and every pull request runs typecheck, lint, the test
-suite and a build (`.github/workflows/ci.yml`). `main` is protected by the
-ruleset in `.github/rulesets/main.json`: no force pushes, no deletion, changes
-land through a pull request, and the `check` job has to pass first.
+suite and a build (`.github/workflows/ci.yml`). `main` is protected by two
+rulesets in `.github/rulesets/`: `main-history.json` blocks force pushes and
+deletion for everyone, and `main-review.json` makes everyone except repo
+admins land changes through a pull request with the `check` job green.
 
 To cut a release, bump `version` in `package.json`, add a `## <version>`
 section to `CHANGELOG.md`, merge, then tag:

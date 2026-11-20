@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The branch ruleset on main requires this job by its id, "check".
-  # Renaming it means updating .github/rulesets/main.json too.
+  # The ruleset on main requires this job by its id, "check".
+  # Renaming it means updating .github/rulesets/main-review.json too.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
