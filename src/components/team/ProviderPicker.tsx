@@ -43,19 +43,23 @@ export function ProviderPicker({
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState('');
 
-  const load = async () => {
-    try {
-      const response = await fetch('/api/cli-providers');
-      const data = await response.json();
-      if (data.error) setError(data.error);
-      else setProviders(data.providers);
-    } catch {
-      setError('Could not reach the provider list.');
-    }
-  };
-
   useEffect(() => {
-    void load();
+    // State is set in the callback, once the response is in, and not at all if
+    // the picker has gone away by then.
+    let live = true;
+    fetch('/api/cli-providers')
+      .then((response) => response.json())
+      .then((data) => {
+        if (!live) return;
+        if (data.error) setError(data.error);
+        else setProviders(data.providers);
+      })
+      .catch(() => {
+        if (live) setError('Could not reach the provider list.');
+      });
+    return () => {
+      live = false;
+    };
   }, []);
 
   const chosen = providers?.find((p) => p.id === provider);

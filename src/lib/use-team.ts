@@ -77,30 +77,47 @@ const EMPTY: TeamView = {
   members: [],
 };
 
+/** GET /api/team. Never throws: a failure comes back as `failure`. */
+async function fetchTeam(): Promise<{ data?: TeamView & { error?: string }; failure?: unknown }> {
+  try {
+    const res = await fetch('/api/team');
+    return { data: await res.json() };
+  } catch (failure) {
+    return { failure };
+  }
+}
+
 export function useTeam() {
   const [team, setTeam] = useState<TeamView>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch('/api/team');
-      const data = await res.json();
-      if (data.error) setError(data.error);
-      else {
-        setTeam(data);
-        setError(null);
-      }
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoading(false);
+  /** Puts a fetched view, or the reason there is none, into state. */
+  const apply = useCallback((result: { data?: TeamView & { error?: string }; failure?: unknown }) => {
+    if (result.failure !== undefined) setError(String(result.failure));
+    else if (result.data?.error) setError(result.data.error);
+    else if (result.data) {
+      setTeam(result.data);
+      setError(null);
     }
+    setLoading(false);
   }, []);
 
+  const load = useCallback(async () => {
+    apply(await fetchTeam());
+  }, [apply]);
+
   useEffect(() => {
-    load();
-  }, [load]);
+    // State is set in the callback, once the response is in, and not at all if
+    // the component has gone away by then.
+    let live = true;
+    fetchTeam().then((result) => {
+      if (live) apply(result);
+    });
+    return () => {
+      live = false;
+    };
+  }, [apply]);
 
   /**
    * Every mutation returns the whole view, so the page never has to guess what

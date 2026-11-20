@@ -13,6 +13,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Matches the oldest Node the app supports (engines in package.json, and
+      # CI), not the newest Node there is. Types for a newer major would let
+      # code use APIs that crash on 22. Raise it together with engines.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       dependencies:
         patterns: ['*']
