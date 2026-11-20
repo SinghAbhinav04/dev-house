@@ -29,7 +29,7 @@ jobs:
       # No version pinned here on purpose — it reads `packageManager` from
       # package.json, so CI uses whatever the repo says it uses and the two
       # cannot drift apart again.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v4
         with:
