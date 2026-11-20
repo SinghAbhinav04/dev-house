@@ -7,6 +7,7 @@ import { AutoGrowTextarea } from '@/components/shared/AutoGrowTextarea';
 import { FeedMessage, PlanMarkdown } from '@/components/plan/PlanViewer';
 import { LunarOfficeScene, type SeatMap } from '@/components/mission/LunarOfficeScene';
 import { SecurityAuditPanel } from '@/components/agents/SecurityAuditPanel';
+import { auditPanelDue, officeGrid } from '@/lib/office-grid';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
 import { getExecutionPathStatus, getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
 import { usePipelineState, type AgentId, type AppMode, type IsolationPolicy, type PendingApproval, type PermissionMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
@@ -50,7 +51,6 @@ export default function PipelinePage() {
   const [selectedSecurityMode, setSelectedSecurityMode] = useState<SecurityMode>('fast');
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<PermissionMode>('auto');
   const [selectedRunGoal, setSelectedRunGoal] = useState<RunGoal>('full-build');
-  const [selectedRunFinalAudit, setSelectedRunFinalAudit] = useState<boolean>(false);
   const [selectedIsolationPolicy, setSelectedIsolationPolicy] = useState<IsolationPolicy>('ask');
 
   const {
@@ -80,6 +80,14 @@ export default function PipelinePage() {
   const supervisorId = supervisor?.id || '';
   const auditor = members.find((m) => m.slot === 'auditor');
   const auditorId = auditor?.id || '';
+  /**
+   * Whether this team's runs include the security audit. The orchestrator
+   * decides that from the roster alone - the audit phase runs exactly when a
+   * member fills the auditor slot (buildRunPlan in src/lib/team/slots.ts) - so
+   * the page reads it from the same place. It used to have a switch of its
+   * own, which the orchestrator had stopped reading.
+   */
+  const auditStaffed = !!auditorId;
   /** Everyone except the supervisor, who gets their own column. */
   const workers = members.filter((m) => m.id !== supervisorId);
 
@@ -211,7 +219,7 @@ export default function PipelinePage() {
       securityMode: selectedSecurityMode,
       permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
-      runFinalAudit: selectedRunFinalAudit,
+      runFinalAudit: auditStaffed,
     } : undefined);
     setChatInput('');
     setSendingAgents(prev => { const n = new Set(prev); n.delete(supervisorId); return n; });
@@ -231,7 +239,7 @@ export default function PipelinePage() {
   async function handleStartPipeline() {
     completionNotifiedRef.current = false;
     setPipelineStarted(true);
-    const res = await startPipeline(selectedSecurityMode, selectedRunGoal, selectedPermissionMode, selectedRunFinalAudit, selectedIsolationPolicy);
+    const res = await startPipeline(selectedSecurityMode, selectedRunGoal, selectedPermissionMode, auditStaffed, selectedIsolationPolicy);
     if (!res?.success) {
       setPipelineStarted(false);
       console.error('Pipeline failed to start:', res?.error || 'Unknown error');
@@ -279,7 +287,7 @@ export default function PipelinePage() {
       securityMode: selectedSecurityMode,
       permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
-      runFinalAudit: selectedRunFinalAudit,
+      runFinalAudit: auditStaffed,
     } : undefined);
     setPanelInputs(prev => ({ ...prev, [id]: '' }));
     setSendingAgents(prev => { const n = new Set(prev); n.delete(id); return n; });
@@ -294,7 +302,7 @@ export default function PipelinePage() {
       securityMode: selectedSecurityMode,
       permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
-      runFinalAudit: selectedRunFinalAudit,
+      runFinalAudit: auditStaffed,
     } : undefined);
     setChatInput('');
     setSendingAgents(prev => { const n = new Set(prev); n.delete(expandedAgent!); return n; });
@@ -311,7 +319,7 @@ export default function PipelinePage() {
       securityMode: selectedSecurityMode,
       permissionMode: selectedPermissionMode,
       runGoal: selectedRunGoal,
-      runFinalAudit: selectedRunFinalAudit,
+      runFinalAudit: auditStaffed,
     } : undefined);
     setSendingAgents(prev => { const n = new Set(prev); n.delete(toAgent); return n; });
   }
@@ -321,18 +329,20 @@ export default function PipelinePage() {
   const securityModeLocked = isPipeline && (pipelineStarted || pipelineRunning || !!state.projectDir);
   const activeSecurityMode = state.projectDir ? (state.securityMode || 'fast') : selectedSecurityMode;
   const activeRunGoal = state.projectDir ? (state.runGoal || 'full-build') : selectedRunGoal;
-  const activeRunFinalAudit = state.projectDir ? !!state.runFinalAudit : selectedRunFinalAudit;
+  const activeRunFinalAudit = auditStaffed;
   // Once a run exists the policy is whatever it started with — showing the
   // picker's value would misreport the boundary the run is actually under.
   const displayedIsolationPolicy = state.projectDir ? (state.isolationPolicy || 'ask') : selectedIsolationPolicy;
 
-  const auditHasStarted = !!(
-    activeRunFinalAudit && (
-      state.currentPhase === 'security-audit' ||
-      state.pipelineStatus === 'awaiting-audit-decision' ||
-      (state.auditFindings && state.auditFindings.length > 0)
-    )
-  );
+  const auditHasStarted = auditPanelDue({
+    currentPhase: state.currentPhase,
+    pipelineStatus: state.pipelineStatus,
+    findingCount: state.auditFindings?.length ?? 0,
+  });
+  // Once the audit panel is up it is the auditor's panel, chat box included,
+  // so the auditor does not also take a worker panel beside it.
+  const panelWorkers = auditHasStarted && auditorId ? workers.filter((m) => m.id !== auditorId) : workers;
+  const grid = officeGrid(panelWorkers.length, auditHasStarted && !!auditorId);
 
   // Derived stats
   const firstEventTime = state.events.length > 0 ? new Date(state.events[0].time).getTime() : 0;
@@ -641,24 +651,11 @@ export default function PipelinePage() {
               <div className="mt-3">
                 <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-faint">Security Audit</div>
                 <div className="flex items-center gap-2">
-                  <div className="flex rounded-lg border border-line bg-surface-raised">
-                    <button
-                      onClick={() => setSelectedRunFinalAudit(false)}
-                      disabled={securityModeLocked}
-                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${!selectedRunFinalAudit ? 'bg-surface-overlay text-ink' : 'text-[var(--ink-faint)] hover:text-[var(--ink-faint)]'}`}
-                      style={{ borderRadius: '7px 0 0 7px' }}
-                    >Off</button>
-                    <button
-                      onClick={() => setSelectedRunFinalAudit(true)}
-                      disabled={securityModeLocked}
-                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-all disabled:cursor-not-allowed disabled:opacity-50 ${selectedRunFinalAudit ? 'bg-signal-bad text-ink' : 'text-[var(--ink-faint)] hover:text-[var(--ink-faint)]'}`}
-                      style={{ borderRadius: '0 7px 7px 0' }}
-                    >On</button>
-                  </div>
+                  <Badge variant={auditStaffed ? 'warning' : 'neutral'}>{auditStaffed ? 'ON' : 'OFF'}</Badge>
                   <span className="text-[10px] text-ink-faint">
-                    {selectedRunFinalAudit
-                      ? 'After tests pass, E reads everything and reports vulnerabilities. Build still completes.'
-                      : 'Skip the post-test security audit'}
+                    {auditStaffed
+                      ? `${auditor?.name} fills the auditor slot, so the audit runs after tests pass and the run waits for your Deploy. To skip it, remove that member on the Team page.`
+                      : 'No member fills the auditor slot, so the audit is skipped. Add one on the Team page to turn it on.'}
                   </span>
                 </div>
               </div>
@@ -909,19 +906,21 @@ export default function PipelinePage() {
         </div>
       </div>
 
-      {/* Agent-panel grid: S spans left column. A/B/C/D fill the center quadrants.
-          When the security audit starts, E is added on the right (same size as S)
-          and the center columns squish to accommodate. */}
+      {/* Agent-panel grid: the supervisor spans the left column and the workers
+          fill the two centre columns, in as many rows as they need. When the
+          security audit starts, its panel is added on the right (same size as
+          the supervisor's) and the centre columns squish to accommodate. The
+          arithmetic, and what went wrong without it, is src/lib/office-grid.ts. */}
       <div
         className="grid gap-px overflow-hidden rounded-xl border border-line bg-[var(--surface-raised)]"
         style={{
-          gridTemplateColumns: auditHasStarted ? '25% 1fr 1fr 25%' : '30% 1fr 1fr',
-          gridTemplateRows: '1fr 1fr',
+          gridTemplateColumns: grid.columns,
+          gridTemplateRows: grid.rows,
           height: '100vh',
         }}
       >
         {/* S — Supervisor, spans both rows */}
-          <div className="flex cursor-pointer flex-col overflow-hidden bg-[var(--surface-sunken)]" style={{ gridRow: '1 / -1' }} onClick={() => setSelectedAgent(supervisorId)}>
+          <div className="flex cursor-pointer flex-col overflow-hidden bg-[var(--surface-sunken)]" style={{ gridRow: '1 / -1', gridColumn: grid.supervisorColumn }} onClick={() => setSelectedAgent(supervisorId)}>
             <div className="flex items-center gap-3 border-b-2 border-signal-ok px-3.5 py-2.5">
             <div className={`flex h-9 w-9 items-center justify-center rounded-[10px] border-2 text-sm font-bold transition-all ${
               (state.agentStatus[supervisorId] === 'active' || state.agentStatus[supervisorId] === 'working')
@@ -1017,7 +1016,7 @@ export default function PipelinePage() {
         </div>
 
         {/* A, B, C, D panels */}
-        {workers.map(({ id }) => {
+        {panelWorkers.map(({ id }) => {
           const events = agentEvents(id);
           const status = state.agentStatus[id] || 'idle';
           const isSelected = selectedAgent === id;
@@ -1125,6 +1124,7 @@ export default function PipelinePage() {
         {/* E — Security Auditor, spans both rows in the rightmost column. Only rendered once the audit has started. */}
         {auditHasStarted && auditorId && (
           <SecurityAuditPanel
+            gridColumn={grid.auditColumn}
             findings={state.auditFindings || []}
             chatEvents={agentEvents(auditorId)}
             auditActionInFlight={!!state.auditActionInFlight}
@@ -1143,7 +1143,7 @@ export default function PipelinePage() {
                 securityMode: selectedSecurityMode,
                 permissionMode: selectedPermissionMode,
                 runGoal: selectedRunGoal,
-                runFinalAudit: selectedRunFinalAudit,
+                runFinalAudit: auditStaffed,
               } : undefined).finally(() => {
                 setSendingAgents((prev) => { const n = new Set(prev); n.delete(auditorId); return n; });
               });

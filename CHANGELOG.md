@@ -58,6 +58,23 @@ on the same machine.
   pending approval and the run state. Reading them from a shell is still
   allowed.
 
+### Fixed
+
+- **A run with an auditor can be finished from the page.** The Security Audit
+  panel, which holds the only Deploy button, was shown only when the page's
+  "Security Audit" switch was on, and the orchestrator had stopped reading that
+  switch: the audit runs whenever a member fills the auditor slot. With the
+  starter roster and the switch at its default, a run paused at
+  `awaiting-audit-decision` and the page offered nothing to answer it. The
+  panel is now shown whenever the run is auditing, is waiting on the decision
+  or has findings, and the switch is replaced by a line saying whether the
+  audit will run, read from the roster.
+- **The member grid no longer collapses with a fifth worker.** The grid
+  declared two rows; a fifth worker panel made an undeclared third, which grew
+  with its content until every other panel, the supervisor's chat box included,
+  had no height. The grid now declares as many rows as its workers need, the
+  supervisor is pinned to the first column and the audit panel to the last.
+
 ### Upgrading
 
 Stop any run in progress before upgrading. A run started on an older version
