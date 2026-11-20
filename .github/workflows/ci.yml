@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No version pinned here on purpose — it reads `packageManager` from
       # package.json, so CI uses whatever the repo says it uses and the two

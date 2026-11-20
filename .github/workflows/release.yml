@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Tag matches package.json
         run: |
@@ -56,7 +56,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Use this version's section of CHANGELOG.md ("## 0.4.4" or "## v0.4.4")
       # as the release notes when there is one, GitHub's generated notes when
