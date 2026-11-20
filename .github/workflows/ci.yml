@@ -31,7 +31,7 @@ jobs:
       # cannot drift apart again.
       - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # The test suite imports .ts sources directly via
           # --experimental-strip-types, which needs a recent Node.
