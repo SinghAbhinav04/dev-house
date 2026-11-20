@@ -239,6 +239,23 @@ node scripts/probe-opencode.mjs
 node scripts/probe-api-guard.mjs      # needs a running server; spends nothing
 ```
 
+### CI and releases
+
+Every push to `main` and every pull request runs typecheck, lint, the test
+suite and a build (`.github/workflows/ci.yml`). `main` is protected by the
+ruleset in `.github/rulesets/main.json`: no force pushes, no deletion, changes
+land through a pull request, and the `check` job has to pass first.
+
+To cut a release, bump `version` in `package.json`, add a `## <version>`
+section to `CHANGELOG.md`, merge, then tag:
+
+```bash
+git tag v0.4.4 && git push origin v0.4.4
+```
+
+`.github/workflows/release.yml` re-runs the checks and publishes a GitHub
+release with that changelog section as its notes.
+
 ---
 
 ## Honest state of things

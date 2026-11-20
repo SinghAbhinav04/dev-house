@@ -4,10 +4,24 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# Read-only by default. Nothing in CI needs to write to the repo, and a PR
+# from a fork must not get a token that can.
+permissions:
+  contents: read
+
+# A new push to the same PR or branch cancels the run it makes stale.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # The branch ruleset on main requires this job by its id, "check".
+  # Renaming it means updating .github/rulesets/main.json too.
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
