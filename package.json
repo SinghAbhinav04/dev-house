@@ -40,11 +40,11 @@
     "framer-motion": "^12.36.0",
     "lucide-react": "^0.577.0",
     "mermaid": "^11.17.2",
-    "next": "16.1.6",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "react-markdown": "^10.1.0",
-    "recharts": "^3.8.0",
+    "recharts": "^3.11.0",
     "remark-breaks": "^4.0.0"
   },
   "devDependencies": {
@@ -53,8 +53,8 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
-    "sharp": "^0.34.5",
+    "eslint-config-next": "16.4.6",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
