@@ -6,11 +6,12 @@ import { Badge } from '@/components/shared/Badge';
 import { AutoGrowTextarea } from '@/components/shared/AutoGrowTextarea';
 import { FeedMessage, PlanMarkdown } from '@/components/plan/PlanViewer';
 import { LunarOfficeScene, type SeatMap } from '@/components/mission/LunarOfficeScene';
+import { DevHouseStudio3D } from '@/components/studio3d/DevHouseStudio3D';
 import { SecurityAuditPanel } from '@/components/agents/SecurityAuditPanel';
 import { auditPanelDue, officeGrid } from '@/lib/office-grid';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
 import { getExecutionPathStatus, getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
-import { usePipelineState, type AgentId, type AppMode, type IsolationPolicy, type PendingApproval, type PermissionMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
+import { usePipelineState, type AgentId, type AppMode, type IsolationPolicy, type PermissionMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
 import { useTeam } from '@/lib/use-team';
 import { MODEL_ALIASES, SLOT_LABELS } from '@/lib/team/types';
 
@@ -52,6 +53,7 @@ export default function PipelinePage() {
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<PermissionMode>('auto');
   const [selectedRunGoal, setSelectedRunGoal] = useState<RunGoal>('full-build');
   const [selectedIsolationPolicy, setSelectedIsolationPolicy] = useState<IsolationPolicy>('ask');
+  const [studioView, setStudioView] = useState<'3d' | '2d'>('3d');
 
   const {
     state, sendChat, startPipeline, resumePipeline, stopPipeline, setStopAfterReview, approveBash, getPlan, resetState, agentEvents, agentSpeech,
@@ -308,6 +310,20 @@ export default function PipelinePage() {
     setSendingAgents(prev => { const n = new Set(prev); n.delete(expandedAgent!); return n; });
   }
 
+  async function handleSendToAgent(targetId: AgentId) {
+    if (!targetId || sendingAgents.has(targetId) || !chatInput.trim()) return;
+    const msg = chatInput.trim();
+    setSendingAgents(prev => new Set([...prev, targetId]));
+    await sendChat(targetId, msg, isPipeline ? {
+      securityMode: selectedSecurityMode,
+      permissionMode: selectedPermissionMode,
+      runGoal: selectedRunGoal,
+      runFinalAudit: auditStaffed,
+    } : undefined);
+    setChatInput('');
+    setSendingAgents(prev => { const n = new Set(prev); n.delete(targetId); return n; });
+  }
+
   async function handleHandoff(fromAgent: AgentId, toAgent: AgentId) {
     const textEvents = state.events.filter(e => e.agent === fromAgent && e.type === 'text');
     if (textEvents.length === 0) return;
@@ -401,33 +417,482 @@ export default function PipelinePage() {
         tone: 'info',
       };
 
+  const activeChatId = selectedAgent || supervisorId || (members[0]?.id ?? '');
+  const activeChatMember = members.find((m) => m.id === activeChatId);
+  const activeChatEvents = agentEvents(activeChatId);
+
+  const terminalChatNode = (
+    <div className="flex h-[calc(88vh-140px)] flex-col overflow-hidden rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#1e1915]/60 text-[#f4ece2]">
+      {/* Agent selector bar */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-[rgba(244,236,226,0.08)] bg-[#17130f]/90 px-3.5 py-2.5">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-[#8a7a6b] mr-1">Direct Chat:</span>
+        {members.map((m) => {
+          const isSelected = m.id === activeChatId;
+          const status = state.agentStatus[m.id];
+          const isWorking = status === 'working' || status === 'active';
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setSelectedAgent(m.id)}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-all ${
+                isSelected
+                  ? 'bg-[#d98b4d] text-[#17130f] shadow-sm font-bold'
+                  : 'bg-[#262019] text-[#c4b5a5] hover:text-[#f4ece2] hover:bg-[#2f2820]'
+              }`}
+            >
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ background: m.color || '#d98b4d' }}
+              />
+              <span>{m.name}</span>
+              {isWorking && (
+                <span className={`h-1.5 w-1.5 rounded-full ${isSelected ? 'bg-[#17130f] animate-pulse' : 'bg-[#8fae60] animate-pulse'}`} />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Pending Approval Banner */}
+      {pendingApproval && (
+        <div className="m-3 rounded-xl border border-[#d9a441]/50 bg-[#d9a441]/10 p-3.5 backdrop-blur-md">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#d9a441]">
+              ⚡ Guardrail Approval Requested
+            </span>
+            <Badge variant="warning">STRICT MODE</Badge>
+          </div>
+          <p className="mt-1 font-mono text-xs text-[#f4ece2]">{pendingApproval.description || JSON.stringify(pendingApproval.input)}</p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => approveBash(true)}
+              className="rounded-lg bg-[#8fae60] px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-[#17130f] shadow-md hover:bg-[#8fae60]/90"
+            >
+              Approve Execution
+            </button>
+            <button
+              type="button"
+              onClick={() => approveBash(false)}
+              className="rounded-lg bg-[#cf6c5a] px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-white shadow-md hover:bg-[#cf6c5a]/90"
+            >
+              Deny
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Conversation Thread */}
+      <div className="flex-1 space-y-2 overflow-y-auto p-4 [scrollbar-width:thin]">
+        {activeChatEvents.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-center">
+            <div
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-sm font-bold text-[#17130f] shadow-md"
+              style={{ background: activeChatMember?.color || '#d98b4d' }}
+            >
+              {activeChatMember ? initials(activeChatMember.name) : '—'}
+            </div>
+            <p className="mt-2 text-xs font-semibold text-[#f4ece2]">
+              Direct session with {activeChatMember?.name || 'specialist'}
+            </p>
+            <p className="mt-1 text-[11px] text-[#8a7a6b]">
+              Type instructions or queries below.
+            </p>
+          </div>
+        ) : (
+          activeChatEvents.map((e, i) => (
+            <div
+              key={i}
+              className={`rounded-xl p-3 text-xs leading-relaxed ${
+                e.type === 'approval'
+                  ? 'border border-[#8fae60]/40 bg-[#8fae60]/10 text-[#8fae60] font-bold'
+                  : e.type === 'question'
+                  ? 'border border-[#d98b4d]/40 bg-[#d98b4d]/10 text-[#d98b4d] font-semibold'
+                  : e.type === 'issue' || e.type === 'failure'
+                  ? 'border border-[#cf6c5a]/40 bg-[#cf6c5a]/10 text-[#cf6c5a]'
+                  : e.type === 'tool_call'
+                  ? 'border border-[rgba(244,236,226,0.06)] bg-[#262019]/40 italic text-[#8a7a6b]'
+                  : e.type === 'user_msg'
+                  ? 'border border-[#7fa8a0]/40 bg-[#7fa8a0]/10 font-semibold text-[#7fa8a0]'
+                  : 'border border-[rgba(244,236,226,0.08)] bg-[#262019]/70 text-[#f4ece2]'
+              }`}
+            >
+              <div className="mb-1 flex items-center justify-between text-[10px] text-[#8a7a6b]">
+                <span className="font-bold" style={{ color: memberColor(e.agent) || 'inherit' }}>
+                  {memberName(e.agent)}
+                </span>
+                <span>
+                  {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              </div>
+              <FeedMessage event={e} author={memberName(e.agent)} onOpen={openDocument} />
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Input composer */}
+      <div className="border-t border-[rgba(244,236,226,0.08)] bg-[#17130f]/90 p-3">
+        <div className="flex items-end gap-2">
+          <AutoGrowTextarea
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (chatInput.trim()) {
+                  if (activeChatId === supervisorId) {
+                    handleSend();
+                  } else {
+                    handleSendToAgent(activeChatId);
+                  }
+                }
+              }
+            }}
+            placeholder={`Message ${activeChatMember?.name || 'specialist'}... (Enter to send)`}
+            className="flex-1 rounded-xl border border-[rgba(244,236,226,0.12)] bg-[#17130f] px-3.5 py-2 text-xs text-[#f4ece2] placeholder-[#8a7a6b] focus:border-[#d98b4d] focus:outline-none"
+            rows={1}
+          />
+          <button
+            type="button"
+            disabled={!chatInput.trim() || sendingAgents.has(activeChatId)}
+            onClick={() => {
+              if (chatInput.trim()) {
+                if (activeChatId === supervisorId) {
+                  handleSend();
+                } else {
+                  handleSendToAgent(activeChatId);
+                }
+              }
+            }}
+            className="rounded-xl bg-[#d98b4d] px-4 py-2 text-xs font-bold uppercase tracking-wider text-[#17130f] shadow-md transition-all hover:bg-[#d98b4d]/90 disabled:opacity-40"
+          >
+            {sendingAgents.has(activeChatId) ? 'Sending...' : 'Send'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const terminalPipelineNode = (
+    <div className="space-y-4 max-w-4xl mx-auto text-[#f4ece2]">
+      {/* Mode Posture */}
+      <div className={`rounded-xl border p-4 ${
+        modePosture.tone === 'warning'
+          ? 'border-[#d9a441]/40 bg-[#d9a441]/10'
+          : 'border-[rgba(244,236,226,0.08)] bg-[#262019]/70'
+      }`}>
+        <div className="flex items-center justify-between">
+          <div className="font-mono text-xs font-bold uppercase tracking-wider text-[#f4ece2]">{modePosture.title}</div>
+          <Badge variant={isPipeline ? (activeSecurityMode === 'strict' ? 'warning' : 'success') : 'neutral'}>
+            {isPipeline ? 'SUPERVISOR-RUN' : 'YOU-RUN'}
+          </Badge>
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-[#f4ece2]">{modePosture.summary}</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-[#c4b5a5]">{modePosture.detail}</p>
+      </div>
+
+      {/* Security & Permissions Configuration Grid */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#262019]/50 p-3.5">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#8a7a6b]">Security Mode</div>
+          <div className="flex rounded-lg border border-[rgba(244,236,226,0.08)] bg-[#17130f] p-0.5">
+            <button
+              type="button"
+              onClick={() => setSelectedSecurityMode('fast')}
+              disabled={securityModeLocked}
+              className={`flex-1 rounded py-1 text-center text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+                selectedSecurityMode === 'fast' ? 'bg-[#8fae60] text-[#17130f] shadow-sm' : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+              }`}
+            >
+              Fast
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedSecurityMode('strict')}
+              disabled={securityModeLocked}
+              className={`flex-1 rounded py-1 text-center text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+                selectedSecurityMode === 'strict' ? 'bg-[#d9a441] text-[#17130f] shadow-sm' : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+              }`}
+            >
+              Strict
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-[#c4b5a5]">
+            {selectedSecurityMode === 'strict' ? 'Bash prompts for approval' : 'Fast-path background runs'}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#262019]/50 p-3.5">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#8a7a6b]">Permissions</div>
+          <div className="flex rounded-lg border border-[rgba(244,236,226,0.08)] bg-[#17130f] p-0.5">
+            <button
+              type="button"
+              onClick={() => setSelectedPermissionMode('auto')}
+              disabled={securityModeLocked}
+              className={`flex-1 rounded py-1 text-center text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+                selectedPermissionMode === 'auto' ? 'bg-[#d98b4d] text-[#17130f] shadow-sm' : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+              }`}
+            >
+              Auto
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedPermissionMode('plan')}
+              disabled={securityModeLocked}
+              className={`flex-1 rounded py-1 text-center text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+                selectedPermissionMode === 'plan' ? 'bg-[#c084fc] text-[#17130f] shadow-sm' : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+              }`}
+            >
+              Plan
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedPermissionMode('dangerously-skip-permissions')}
+              disabled={securityModeLocked}
+              className={`flex-1 rounded py-1 text-center text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+                selectedPermissionMode === 'dangerously-skip-permissions' ? 'bg-[#cf6c5a] text-white shadow-sm' : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+              }`}
+            >
+              Skip
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-[#c4b5a5]">
+            {selectedPermissionMode === 'auto' ? 'AI classifier safety checks' : selectedPermissionMode === 'plan' ? 'Ask before every tool call' : 'Skip checks'}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#262019]/50 p-3.5">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#8a7a6b]">Supervisor Goal</div>
+          <div className="flex rounded-lg border border-[rgba(244,236,226,0.08)] bg-[#17130f] p-0.5">
+            <button
+              type="button"
+              onClick={() => setSelectedRunGoal('full-build')}
+              disabled={securityModeLocked}
+              className={`flex-1 rounded py-1 text-center text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+                selectedRunGoal === 'full-build' ? 'bg-[#7fa8a0] text-[#17130f] shadow-sm' : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+              }`}
+            >
+              Full Build
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedRunGoal('plan-only')}
+              disabled={securityModeLocked}
+              className={`flex-1 rounded py-1 text-center text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+                selectedRunGoal === 'plan-only' ? 'bg-[#c084fc] text-[#17130f] shadow-sm' : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+              }`}
+            >
+              Plan Only
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-[#c4b5a5]">
+            {selectedRunGoal === 'plan-only' ? 'Stop cleanly after plan approval' : 'Run team from planning to testing'}
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#262019]/60 p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#f4ece2]">Active Phase:</span>
+            <Badge variant={PHASE_VARIANTS[phase] || 'neutral'}>
+              {PHASE_LABELS[phase] || phase}
+            </Badge>
+          </div>
+          <span className="font-mono text-xs font-bold text-[#d98b4d]">{progress}% complete</span>
+        </div>
+        <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-[#17130f] border border-[rgba(244,236,226,0.08)]">
+          <div
+            className="h-full bg-gradient-to-r from-[#d98b4d] to-[#8fae60] transition-all duration-500 rounded-full"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 pt-2">
+        {!pipelineRunning && !pipelinePaused && (
+          <button
+            type="button"
+            onClick={handleStartPipeline}
+            className="rounded-xl bg-[#8fae60] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-[#17130f] shadow-lg hover:bg-[#8fae60]/90"
+          >
+            {selectedRunGoal === 'plan-only' ? 'Start Plan Only' : 'Start Full Pipeline Run'}
+          </button>
+        )}
+        {pipelineRunning && (
+          <button
+            type="button"
+            onClick={() => { setPipelineStarted(false); completionNotifiedRef.current = false; stopPipeline(); setSendingAgents(new Set()); }}
+            className="rounded-xl bg-[#cf6c5a] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-lg hover:bg-[#cf6c5a]/90"
+          >
+            Stop Pipeline
+          </button>
+        )}
+        {canContinueApprovedPlan && (
+          <button
+            type="button"
+            onClick={handleResumePipeline}
+            className="rounded-xl bg-[#7fa8a0] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-[#17130f] shadow-lg hover:bg-[#7fa8a0]/90"
+          >
+            Continue Build
+          </button>
+        )}
+        {canResumeStalledTurn && (
+          <button
+            type="button"
+            onClick={handleResumePipeline}
+            className="rounded-xl bg-[#d9a441] px-5 py-2.5 text-xs font-bold uppercase tracking-wider text-[#17130f] shadow-lg hover:bg-[#d9a441]/90"
+          >
+            Resume Stalled Run
+          </button>
+        )}
+        {state.currentPhase !== 'concept' && (
+          <button
+            type="button"
+            onClick={handleViewPlan}
+            className="rounded-xl border border-[rgba(244,236,226,0.1)] bg-[#262019] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[#f4ece2] hover:bg-[#2f2820]"
+          >
+            View Architecture Plan
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={handleReset}
+          className="rounded-xl border border-[rgba(244,236,226,0.1)] bg-[#262019] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[#8a7a6b] hover:text-[#cf6c5a] hover:border-[#cf6c5a]/40"
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+  );
+
+  const terminalFeedNode = (
+    <div className="flex h-[calc(88vh-140px)] flex-col overflow-hidden rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#1e1915]/60 text-[#f4ece2]">
+      <div className="flex items-center justify-between border-b border-[rgba(244,236,226,0.08)] bg-[#17130f]/90 px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <div className="h-2 w-2 animate-pulse rounded-full bg-[#8fae60]" />
+          <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#f4ece2]">
+            Live Event Stream
+          </span>
+        </div>
+        <span className="font-mono text-[10px] text-[#8a7a6b]">{state.events.length} events logged</span>
+      </div>
+      <div className="flex-1 space-y-1.5 overflow-y-auto p-4 font-mono [scrollbar-width:thin]">
+        {state.events.length === 0 ? (
+          <p className="py-12 text-center text-xs text-[#8a7a6b]">
+            {isPipeline ? 'Waiting for pipeline activities...' : 'Waiting for team activity...'}
+          </p>
+        ) : (
+          state.events.map((e, i) => (
+            <div key={i} className="flex gap-2.5 py-1 text-xs leading-relaxed">
+              <span className="flex-shrink-0 tabular-nums text-[#8a7a6b] text-[10px]">
+                {new Date(e.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+              <span
+                className="w-20 flex-shrink-0 truncate font-bold text-xs"
+                style={{ color: memberColor(e.agent) || 'var(--ink-faint)' }}
+                title={e.agent === 'system' ? 'System' : memberName(e.agent)}
+              >
+                {e.agent === 'system' ? '--' : memberName(e.agent)}
+              </span>
+              <div
+                className={`min-w-0 flex-1 ${
+                  e.type === 'approval'
+                    ? 'font-bold text-[#8fae60]'
+                    : e.type === 'question'
+                    ? 'text-[#d98b4d]'
+                    : e.type === 'issue' || e.type === 'failure'
+                    ? 'text-[#cf6c5a]'
+                    : e.type === 'tool_call'
+                    ? 'text-[#8a7a6b]'
+                    : e.type === 'user_msg'
+                    ? 'text-[#7fa8a0] font-semibold'
+                    : 'text-[#c4b5a5]'
+                }`}
+              >
+                <FeedMessage event={e} author={memberName(e.agent)} onOpen={openDocument} />
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="p-4 space-y-4">
-      {/* Hero: Animation + Feed (65%) + Dashboard (35%)
-          The height is pinned to the viewport on purpose. Without it the row
-          grows to fit whichever column is tallest, the feed's `minHeight: 100%`
-          resolves against that grown row, and the two chase each other — so a
-          long run pushed the feed past the bottom of the page and you scrolled
-          the document instead of the feed. Both columns now scroll inside
-          themselves. */}
-      <div
-        className="grid gap-4"
-        style={{ gridTemplateColumns: '65% 1fr', height: 'calc(100vh - 2rem)', minHeight: '32rem' }}
-      >
-        {/* Office Scene + Live Feed below it — height driven by dashboard */}
-        <div className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface-raised" style={{ height: 0, minHeight: '100%' }}>
-          <div className="p-2">
-            <LunarOfficeScene
-              activePhase={phase}
-              agentStatus={state.agentStatus}
-              latestSpeech={Object.fromEntries(members.map((m) => [m.id, agentSpeech(m.id)]))}
-              runFinalAudit={activeRunFinalAudit}
-              seats={seats}
-              guests={guests}
-              members={officeMembers}
-              onAgentClick={(id) => { setSelectedAgent(id); setExpandedAgent(id); }}
-            />
-          </div>
+      {studioView === '3d' ? (
+        <div className="h-[calc(100vh-2rem)] w-full">
+          <DevHouseStudio3D
+            activePhase={phase}
+            agentStatus={state.agentStatus}
+            latestSpeech={Object.fromEntries(members.map((m) => [m.id, agentSpeech(m.id)]))}
+            runFinalAudit={activeRunFinalAudit}
+            seats={seats}
+            guests={guests}
+            members={officeMembers}
+            initialPlan={planContent || ''}
+            onSavePlan={(plan) => setPlanContent(plan)}
+            onAgentClick={(id) => { setSelectedAgent(id); }}
+            onViewSwitch={(m) => setStudioView(m)}
+            isPipelineRunning={isPipeline && state.pipelineStatus === 'running'}
+            onStartPipeline={handleStartPipeline}
+            onStopPipeline={() => { setPipelineStarted(false); completionNotifiedRef.current = false; stopPipeline(); setSendingAgents(new Set()); }}
+            pipelineControlsNode={terminalPipelineNode}
+            chatNode={terminalChatNode}
+            feedNode={terminalFeedNode}
+          />
+        </div>
+      ) : (
+        <>
+          {/* Hero: Animation + Feed (65%) + Dashboard (35%)
+              The height is pinned to the viewport on purpose. Without it the row
+              grows to fit whichever column is tallest, the feed's `minHeight: 100%`
+              resolves against that grown row, and the two chase each other — so a
+              long run pushed the feed past the bottom of the page and you scrolled
+              the document instead of the feed. Both columns now scroll inside
+              themselves. */}
+          <div
+            className="grid gap-4"
+            style={{ gridTemplateColumns: '65% 1fr', height: 'calc(100vh - 2rem)', minHeight: '32rem' }}
+          >
+            {/* Office Scene + Live Feed below it — height driven by dashboard */}
+            <div className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface-raised" style={{ height: 0, minHeight: '100%' }}>
+              <div className="flex items-center justify-between border-b border-line px-3 py-1.5 bg-[#0e0c10]/70">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[9px] uppercase tracking-wider text-ink-faint">View Mode</span>
+                  <div className="flex rounded-lg border border-line bg-surface-raised p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setStudioView('3d')}
+                      className="rounded px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink-faint hover:text-ink transition-colors"
+                    >
+                      3D Studio
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStudioView('2d')}
+                      className="rounded px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-accent text-ink shadow-sm"
+                    >
+                      2D Retro
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="p-2">
+                <LunarOfficeScene
+                  activePhase={phase}
+                  agentStatus={state.agentStatus}
+                  latestSpeech={Object.fromEntries(members.map((m) => [m.id, agentSpeech(m.id)]))}
+                  runFinalAudit={activeRunFinalAudit}
+                  seats={seats}
+                  guests={guests}
+                  members={officeMembers}
+                  onAgentClick={(id) => { setSelectedAgent(id); setExpandedAgent(id); }}
+                />
+              </div>
           {/* Live Feed — fills remaining space below animation */}
           <div className="flex min-h-0 flex-1 flex-col border-t border-line">
             <div className="flex items-center justify-between px-4 py-1.5">
@@ -1151,9 +1616,11 @@ export default function PipelinePage() {
           />
         )}
       </div>
+      </>
+      )}
 
-      {/* Agent Detail Modal */}
-      {expandedAgent && expandedAgent !== supervisorId && (
+      {/* Agent Detail Modal (2D view only) */}
+      {studioView === '2d' && expandedAgent && expandedAgent !== supervisorId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-sunken/70" onClick={() => setExpandedAgent(null)}>
           <div className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-[var(--surface)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 border-b border-line px-6 py-4">
