@@ -70,6 +70,39 @@ const PLAN_SECTIONS = [
   ['Tests', 'Open `index.html`. Add a card, drag it to every column, reload and check it stayed put.'],
 ];
 
+const FULL_SPRINT = [
+  {
+    title: 'Edit and delete a card',
+    description: 'Double-click a card to rename it; a small **×** removes it. Both save straight away.',
+    assignee: 'coder', type: 'story', priority: 'p2', estimateMinutes: 15, tags: ['ui'],
+    acceptance: ['Rename sticks after reload', 'Delete asks nothing and is undoable with Ctrl+Z'],
+  },
+  {
+    title: 'WIP limit on Doing',
+    description: 'At most **3** cards in *Doing*; a fourth drop is refused with a short shake.',
+    assignee: 'coder', type: 'story', priority: 'p3', estimateMinutes: 15, tags: ['rules'],
+    acceptance: ['A fourth card cannot enter Doing', 'The column header shows 3/3'],
+  },
+  {
+    title: 'Keyboard: add a card with N',
+    description: 'Pressing `N` focuses the *Add card* box from anywhere on the page.',
+    assignee: 'coder', type: 'task', priority: 'p3', estimateMinutes: 10, tags: ['a11y', 'keyboard'],
+    acceptance: ['N focuses the input', 'N inside the input types an n'],
+  },
+  {
+    title: 'Dark mode',
+    description: 'Follows the system setting, with the board colours as CSS variables.',
+    assignee: 'coder', type: 'story', priority: 'p3', estimateMinutes: 15, tags: ['ui', 'theme'],
+    acceptance: ['Matches prefers-color-scheme', 'Contrast AA on cards'],
+  },
+  {
+    title: 'Accessibility pass',
+    description: 'Labels on every control, visible focus, and drag and drop that also works from the keyboard.',
+    assignee: 'tester', type: 'task', priority: 'p2', estimateMinutes: 15, tags: ['qa', 'a11y'],
+    acceptance: ['Every control has a label', 'A card can be moved without a mouse'],
+  },
+];
+
 if (statuses.includes('ready')) {
   say('Splitting the plan into tickets.');
   wait(delay);
@@ -94,6 +127,9 @@ if (statuses.includes('ready')) {
         assignee: 'tester', type: 'task', priority: 'p2', estimateMinutes: 10, tags: ['qa'],
         acceptance: ['Covers every behaviour in the plan'],
       },
+      // STUB_BACKLOG=full (the demo): a realistic sprint, so the board has
+      // cards in every column while the run plays out.
+      ...(process.env.STUB_BACKLOG === 'full' ? FULL_SPRINT : []),
     ],
   };
 } else if (statuses.includes('asked')) {
@@ -269,6 +305,21 @@ function writeCode(what) {
       .replace("  list.addEventListener('dragover', (e) => e.preventDefault());", "  column.addEventListener('dragover', (e) => e.preventDefault());")
       .replace("  list.addEventListener('drop', (e) => {", "  column.addEventListener('drop', (e) => {")
       .replace("    if (card) card.col = list.closest('.column').dataset.col;", '    if (card) card.col = column.dataset.col;'));
+  } else {
+    // Any other ticket: a small module of its own, wired into the page.
+    const slug = what.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    fs.mkdirSync(path.join(dir, 'features'), { recursive: true });
+    file(`features/${slug}.js`, [
+      `// ${what}`,
+      `export function install(board) {`,
+      `  board.dataset.${slug.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase())} = 'on';`,
+      `}`,
+      '',
+    ].join('\n'));
+    const html = read('index.html');
+    if (html && !html.includes(`features/${slug}.js`)) {
+      file('index.html', html.replace('  <script src="board.js"></script>', `  <script type="module" src="features/${slug}.js"></script>\n  <script src="board.js"></script>`));
+    }
   }
 }
 

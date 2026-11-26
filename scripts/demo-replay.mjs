@@ -110,6 +110,8 @@ const env = {
   HACKEROOM_HOME: teamHome,
   STUB_STATE: stubState,
   STUB_DELAY_MS: fast ? '0' : process.env.STUB_DELAY_MS || '4000',
+  // The demo plays a full sprint, so the board fills up as the team works.
+  STUB_BACKLOG: process.env.STUB_BACKLOG || 'full',
   HACKEROOM_SCENE_GAP_MS: fast ? '0' : process.env.HACKEROOM_SCENE_GAP_MS || '2500',
   [RUN_TOKEN_ENV]: token,
 };
