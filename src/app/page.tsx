@@ -836,6 +836,7 @@ export default function PipelinePage() {
             members={officeMembers}
             board={state.board}
             tickets={state.tickets}
+            events={state.events}
             onSubmitBrief={submitBrief}
             onTicketOp={sendTicketOp}
             onAgentClick={(id) => { setSelectedAgent(id); }}

@@ -2459,7 +2459,7 @@ async function runQaHuddle(
 
   try {
     setAgent(testerId, 'active');
-    emit(testerId, 'testing', 'call_member', `${testerName} heads over to ${coderName}'s desk before testing`, encodeWorkflowDetail({ target: coderId }));
+    emit(testerId, 'testing', 'call_member', `${testerName} heads over to ${coderName}'s desk before testing`, encodeWorkflowDetail({ target: coderId, visit: true }));
     const asked = await claude('tester', wf.buildQaQuestionsPrompt(planPath, inScope), {
       resume: dSession,
       jsonSchema: wf.QA_QUESTIONS_SCHEMA,

@@ -11,10 +11,16 @@ export interface StylizedCharacterOptions {
   hasHeadphones?: boolean;
 }
 
+export type CharacterGesture = 'none' | 'write' | 'talk';
+
 export interface StylizedCharacterResult {
   group: THREE.Group;
   update: (delta: number, isMoving: boolean, isTyping: boolean) => void;
   setFacingAngle: (rad: number) => void;
+  /** Sit down at a desk or stand up from it; the pose changes in place. */
+  setSeated: (seated: boolean) => void;
+  /** What a standing character does with their arms while idle. */
+  setGesture: (gesture: CharacterGesture) => void;
   setColor: (color: string) => void;
   dispose: () => void;
 }
@@ -29,7 +35,7 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
     name,
     roleColor,
     hairStyle = 'short',
-    isSeated = false,
+    isSeated: seatedAtStart = false,
     scale = 1.0,
     hasHeadphones = true,
   } = options;
@@ -82,7 +88,7 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
   geometries.push(torsoGeom);
 
   const torso = new THREE.Mesh(torsoGeom, hoodieMat);
-  torso.position.y = isSeated ? 0.72 : 0.92;
+  torso.position.y = seatedAtStart ? 0.72 : 0.92;
   torso.castShadow = true;
   torso.receiveShadow = true;
   rootGroup.add(torso);
@@ -92,12 +98,12 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
   geometries.push(collarGeom);
   const collar = new THREE.Mesh(collarGeom, hoodieMat);
   collar.rotation.x = Math.PI / 2;
-  collar.position.y = isSeated ? 0.98 : 1.18;
+  collar.position.y = seatedAtStart ? 0.98 : 1.18;
   rootGroup.add(collar);
 
   // --- 2. Head & Hair ---
   const headGroup = new THREE.Group();
-  headGroup.position.set(0, isSeated ? 1.25 : 1.45, 0);
+  headGroup.position.set(0, seatedAtStart ? 1.25 : 1.45, 0);
 
   const headGeom = new THREE.SphereGeometry(0.24, 16, 14);
   headGeom.scale(1, 1.08, 0.95);
@@ -206,7 +212,7 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
 
   // Left Arm (Shoulder Pivot)
   const leftShoulder = new THREE.Group();
-  leftShoulder.position.set(-0.32, isSeated ? 0.94 : 1.14, 0);
+  leftShoulder.position.set(-0.32, seatedAtStart ? 0.94 : 1.14, 0);
   const leftUpper = new THREE.Mesh(upperArmGeom, hoodieMat);
   leftUpper.position.y = -0.12;
   leftUpper.castShadow = true;
@@ -226,7 +232,7 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
 
   // Right Arm (Shoulder Pivot)
   const rightShoulder = new THREE.Group();
-  rightShoulder.position.set(0.32, isSeated ? 0.94 : 1.14, 0);
+  rightShoulder.position.set(0.32, seatedAtStart ? 0.94 : 1.14, 0);
   const rightUpper = new THREE.Mesh(upperArmGeom, hoodieMat);
   rightUpper.position.y = -0.12;
   rightUpper.castShadow = true;
@@ -252,7 +258,7 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
 
   // Left Leg (Hip Pivot)
   const leftHip = new THREE.Group();
-  leftHip.position.set(-0.14, isSeated ? 0.46 : 0.64, 0);
+  leftHip.position.set(-0.14, seatedAtStart ? 0.46 : 0.64, 0);
   const leftThigh = new THREE.Mesh(thighGeom, pantsMat);
   leftThigh.position.y = -0.15;
   leftThigh.castShadow = true;
@@ -273,7 +279,7 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
 
   // Right Leg (Hip Pivot)
   const rightHip = new THREE.Group();
-  rightHip.position.set(0.14, isSeated ? 0.46 : 0.64, 0);
+  rightHip.position.set(0.14, seatedAtStart ? 0.46 : 0.64, 0);
   const rightThigh = new THREE.Mesh(thighGeom, pantsMat);
   rightThigh.position.y = -0.15;
   rightThigh.castShadow = true;
@@ -292,8 +298,11 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
   rightHip.add(rightKnee);
   rootGroup.add(rightHip);
 
-  // Initial Seated Pose Configuration
-  if (isSeated) {
+  let isSeated = seatedAtStart;
+  let gesture: CharacterGesture = 'none';
+
+  /** Puts every joint in the seated pose: thighs forward, hands on the keyboard. */
+  const applySeatedPose = () => {
     // Thighs forward
     leftHip.rotation.x = -Math.PI / 2;
     rightHip.rotation.x = -Math.PI / 2;
@@ -310,7 +319,54 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
     // Elbows bent forward resting hands on keyboard
     leftElbow.rotation.x = -Math.PI / 3.8;
     rightElbow.rotation.x = -Math.PI / 3.8;
-  }
+  };
+
+  /** Straight legs and loose arms, at standing height. */
+  const applyStandingPose = () => {
+    leftHip.rotation.set(0, 0, 0);
+    rightHip.rotation.set(0, 0, 0);
+    leftKnee.rotation.set(0, 0, 0);
+    rightKnee.rotation.set(0, 0, 0);
+    leftShoulder.rotation.set(0, 0, 0);
+    rightShoulder.rotation.set(0, 0, 0);
+    leftElbow.rotation.set(0, 0, 0);
+    rightElbow.rotation.set(0, 0, 0);
+    headGroup.rotation.set(0, 0, 0);
+    torso.rotation.set(0, 0, 0);
+  };
+
+  const setHeights = (seated: boolean) => {
+    const drop = seated ? -0.2 : 0;
+    torso.position.y = 0.92 + drop;
+    collar.position.y = 1.18 + drop;
+    headGroup.position.y = 1.45 + drop;
+    leftShoulder.position.y = 1.14 + drop;
+    rightShoulder.position.y = 1.14 + drop;
+    leftHip.position.y = seated ? 0.46 : 0.64;
+    rightHip.position.y = seated ? 0.46 : 0.64;
+  };
+
+  if (isSeated) applySeatedPose();
+
+  const setSeated = (seated: boolean) => {
+    if (seated === isSeated) return;
+    isSeated = seated;
+    gesture = 'none';
+    setHeights(seated);
+    if (seated) applySeatedPose();
+    else applyStandingPose();
+  };
+
+  const setGesture = (next: CharacterGesture) => {
+    if (next === gesture) return;
+    gesture = next;
+    if (next === 'none') {
+      rightShoulder.rotation.set(0, 0, 0);
+      rightElbow.rotation.set(0, 0, 0);
+      leftShoulder.rotation.set(0, 0, 0);
+      leftElbow.rotation.set(0, 0, 0);
+    }
+  };
 
   let walkCycle = 0;
   let typingCycle = 0;
@@ -352,6 +408,8 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
 
         leftShoulder.rotation.x = -armSwing;
         rightShoulder.rotation.x = armSwing;
+        leftElbow.rotation.x = 0;
+        rightElbow.rotation.x = 0;
 
         // Subtle torso bounce & hip sway
         torso.position.y = 0.92 + Math.abs(Math.sin(walkCycle)) * 0.035;
@@ -364,11 +422,28 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
         rightHip.rotation.x = 0;
         leftKnee.rotation.x = 0;
         rightKnee.rotation.x = 0;
-        leftShoulder.rotation.x = 0;
-        rightShoulder.rotation.x = 0;
         torso.rotation.z = 0;
         torso.position.y = 0.92 + Math.sin(walkCycle) * 0.01;
         headGroup.position.y = 1.45 + Math.sin(walkCycle) * 0.01;
+        if (gesture === 'write') {
+          // Right arm up at the board, small strokes; left arm at rest.
+          rightShoulder.rotation.x = -2.1 + Math.sin(walkCycle * 6) * 0.08;
+          rightShoulder.rotation.z = 0.15 + Math.cos(walkCycle * 4.5) * 0.06;
+          rightElbow.rotation.x = -0.35;
+          leftShoulder.rotation.x = 0;
+          headGroup.rotation.x = -0.12;
+        } else if (gesture === 'talk') {
+          // Hands moving as they explain, head nodding along.
+          leftShoulder.rotation.x = -0.45 + Math.sin(walkCycle * 3) * 0.12;
+          rightShoulder.rotation.x = -0.35 + Math.cos(walkCycle * 2.6) * 0.14;
+          leftElbow.rotation.x = -0.9;
+          rightElbow.rotation.x = -0.8;
+          headGroup.rotation.x = Math.sin(walkCycle * 2.2) * 0.05;
+        } else {
+          leftShoulder.rotation.x = 0;
+          rightShoulder.rotation.x = 0;
+          headGroup.rotation.x = 0;
+        }
       }
     }
   };
@@ -391,6 +466,8 @@ export function createStylizedCharacter(options: StylizedCharacterOptions): Styl
     group: rootGroup,
     update,
     setFacingAngle,
+    setSeated,
+    setGesture,
     setColor,
     dispose,
   };

@@ -24,6 +24,9 @@ import {
 import { createCameraRig } from './core/camera-rig';
 import { TextureCache } from './core/texture-cache';
 import { resolveAllObstacles } from './math/collision';
+import { buildNavGrid } from './core/nav-grid';
+import { createStudioStage, seatOf, type ActorSeat, type StageView } from './core/agent-actor';
+import { createDirector, ingest, nextDirection, type DirectorEvent, type DirectorState } from '@/lib/studio-director';
 import type { InteractionTarget } from './types';
 
 export interface StudioCanvasProps {
@@ -38,6 +41,8 @@ export interface StudioCanvasProps {
   isACOn?: boolean;
   /** What the whiteboard shows; drawn again whenever this object changes. */
   whiteboard?: WhiteboardContent;
+  /** The run's events: hand-offs, board writes and QA turns are acted out in the room. */
+  events?: readonly DirectorEvent[];
   onAgentClick?: (agentId: string) => void;
   onOpenCommanderDesk?: () => void;
   onInspectCharacter?: (member: OfficeMember, slot?: SlotId, status?: string) => void;
@@ -87,6 +92,7 @@ export function StudioCanvas({
   isLightsOn: controlledLights,
   isACOn: controlledAC,
   whiteboard,
+  events,
   onAgentClick,
   onOpenCommanderDesk,
   onInspectCharacter,
@@ -123,6 +129,11 @@ export function StudioCanvas({
   const timeModeTriggerRef = useRef<((mode: TimeOfDayMode) => void) | null>(null);
   const updateWhiteboardTriggerRef = useRef<((content: WhiteboardContent) => void) | null>(null);
 
+  // Stage directions from the run's events, pulled per desk by the render loop.
+  const directorRef = useRef<DirectorState>(createDirector());
+  /** What each desk's teammate is doing right now, for the inspector and labels. */
+  const stageViewRef = useRef<(slot: SlotId) => StageView | undefined>(() => undefined);
+
   // Mutable ref for ALL props & callbacks
   const propsRef = useRef({
     agentStatus,
@@ -156,6 +167,12 @@ export function StudioCanvas({
       onControlsReady,
     };
   });
+
+  // Turn new events into stage directions (seated teammates only).
+  useEffect(() => {
+    const seated = new Set(Object.values(seats).map((o) => o?.agentId).filter((id): id is string => Boolean(id)));
+    directorRef.current = ingest(directorRef.current, events ?? [], (id) => seated.has(id));
+  }, [events, seats]);
 
   // Sync controlled timeOfDayMode
   useEffect(() => {
@@ -334,6 +351,12 @@ export function StudioCanvas({
 
     // 10. Stylized 3D Character Models Physically Seated in Chairs at Desks (ALL 6 TEAM MEMBERS!)
     const devCharacters = new Map<SlotId, StylizedCharacterResult>();
+    // Teammates live in world space so they can get up and walk about; the
+    // group is shown on the studio floor only.
+    const actorsGroup = new THREE.Group();
+    actorsGroup.name = 'TeamActors';
+    scene.add(actorsGroup);
+    const actorSeats = new Map<SlotId, { char: StylizedCharacterResult; seat: ActorSeat }>();
     WORKSTATION_CONFIGS.forEach((config) => {
       const char = createStylizedCharacter({
         name: config.label,
@@ -346,12 +369,11 @@ export function StudioCanvas({
 
       const ws = workstationSystem.workstations.get(config.slot);
       if (ws) {
-        // Seated on the ergonomic chair at (0, 0, 0.62) facing -Z (toward the desk & dual monitors)
-        char.group.position.set(0, 0, 0.62);
-        char.group.rotation.set(0, Math.PI, 0);
+        // Seated on the ergonomic chair at (0, 0, 0.62) desk-local, facing the monitors
         char.group.userData = { isCharacter: true, slot: config.slot };
-        ws.group.add(char.group);
+        actorsGroup.add(char.group);
         devCharacters.set(config.slot, char);
+        actorSeats.set(config.slot, { char, seat: seatOf(ws.group) });
       }
     });
 
@@ -392,6 +414,37 @@ export function StudioCanvas({
       maxX: 8.85,
       minZ: -7.35,
       maxZ: 7.35,
+    };
+
+    // The team's walkable floor: the player's colliders, inflated by a body.
+    const stage = createStudioStage({
+      grid: buildNavGrid(roomBounds, workstationSystem.obstacles, 0.28),
+      characters: actorSeats,
+      // In front of the whiteboard (x -3.2, face at z -4.76), facing it.
+      boardSpots: [
+        { x: -3.2, z: -3.95 },
+        { x: -4.25, z: -3.85 },
+        { x: -2.15, z: -3.85 },
+      ],
+      boardFacing: Math.PI,
+      slotOf: (memberId) => {
+        const seatMap = propsRef.current.seats;
+        return (Object.keys(seatMap) as SlotId[]).find((slot) => seatMap[slot]?.agentId === memberId);
+      },
+    });
+    stageViewRef.current = (slot) => stage.view(slot);
+    const lastColor = new Map<SlotId, string>();
+    const pullDirection = (slot: SlotId) => {
+      const memberId = propsRef.current.seats[slot]?.agentId;
+      if (!memberId) return undefined;
+      const { state, direction } = nextDirection(directorRef.current, memberId);
+      directorRef.current = state;
+      return direction;
+    };
+    const isTypingAt = (slot: SlotId) => {
+      const occupant = propsRef.current.seats[slot];
+      const status = occupant ? propsRef.current.agentStatus[occupant.agentId] || 'idle' : 'idle';
+      return status === 'working' || status === 'active';
     };
 
     // Click-to-Move Destination Ring on Floor
@@ -782,8 +835,9 @@ export function StudioCanvas({
         if (Math.abs(resolved.z - nextZ) > 0.0001) {
           playerVelocity.z = 0;
         }
-        playerPos.x = resolved.x;
-        playerPos.z = resolved.z;
+        const clear = activeFloor === 2 ? stage.pushOut(resolved.x, resolved.z, 0.2) : resolved;
+        playerPos.x = clear.x;
+        playerPos.z = clear.z;
       }
 
       // Shortest-path angle rotation (smooth, no 360 flip glitch!)
@@ -803,29 +857,27 @@ export function StudioCanvas({
       // Smooth Camera Follow
       cameraRig.update(playerPos, delta);
 
-      // Update Team Dev Characters & Realistic Code Screen Textures (ALL 6 TOGETHER ON FLOOR 2!)
-      WORKSTATION_CONFIGS.forEach((config) => {
-        const devChar = devCharacters.get(config.slot);
-        if (config.floorNumber !== activeFloor) {
-          if (devChar) devChar.group.visible = false;
-          return;
-        }
-
-        const occupant = currentProps.seats[config.slot];
-        const status = occupant ? currentProps.agentStatus[occupant.agentId] || 'idle' : 'idle';
-        const speech = occupant ? currentProps.latestSpeech[occupant.agentId] : null;
-        const isTyping = status === 'working' || status === 'active';
-
-        if (devChar) {
-          devChar.group.visible = true;
-          devChar.update(delta, false, isTyping);
-          if (occupant?.color) {
+      // The team: stage directions keep playing on every floor, so the room
+      // is where it should be when you come back; drawn on the studio floor only.
+      actorsGroup.visible = activeFloor === 2;
+      stage.update(delta, performance.now(), pullDirection, isTypingAt, playerPos);
+      if (activeFloor === 2) {
+        WORKSTATION_CONFIGS.forEach((config) => {
+          const occupant = currentProps.seats[config.slot];
+          const status = occupant ? currentProps.agentStatus[occupant.agentId] || 'idle' : 'idle';
+          const speech = occupant ? currentProps.latestSpeech[occupant.agentId] : null;
+          const devChar = devCharacters.get(config.slot);
+          if (devChar && occupant?.color && lastColor.get(config.slot) !== occupant.color) {
+            lastColor.set(config.slot, occupant.color);
             devChar.setColor(occupant.color);
           }
-        }
-
-        workstationSystem.updateStatus(config.slot, status, timeSec, speech);
-      });
+          if (occupant) {
+            const member = currentProps.members.find((m) => m.id === occupant.agentId);
+            if (member) stage.setMemberName(config.slot, member.name);
+          }
+          workstationSystem.updateStatus(config.slot, status, timeSec, speech);
+        });
+      }
 
       // Update Commander Desk Ultrawide Dashboard when on Floor 2
       if (activeFloor === 2) {

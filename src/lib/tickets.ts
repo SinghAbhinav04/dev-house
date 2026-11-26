@@ -401,6 +401,11 @@ export interface WorkflowDetail {
   to?: string;
   /** The member being called, asked or answered. */
   target?: string;
+  /**
+   * On `call_member`: the caller goes to the target (QA visiting the coder's
+   * desk) rather than the target coming over (the planner calling someone).
+   */
+  visit?: boolean;
 }
 
 export function encodeWorkflowDetail(detail: WorkflowDetail): string {

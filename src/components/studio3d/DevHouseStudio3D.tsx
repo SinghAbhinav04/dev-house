@@ -42,6 +42,8 @@ export interface DevHouseStudio3DProps {
   /** The run's whiteboard (brief and plan) and ticket board. */
   board?: BoardState;
   tickets?: Ticket[];
+  /** The run's events, acted out by the team in the room. */
+  events?: StudioCanvasProps['events'];
   onSubmitBrief?: (text: string, start: boolean) => Promise<BriefSubmitResult>;
   onTicketOp?: (op: TicketOpInput) => Promise<{ ok: boolean; error?: string; queued?: boolean }>;
   onAgentClick?: (agentId: string) => void;
@@ -64,6 +66,7 @@ export function DevHouseStudio3D({
   members = [],
   board,
   tickets = [],
+  events,
   onSubmitBrief,
   onTicketOp,
   onAgentClick,
@@ -234,6 +237,7 @@ export function DevHouseStudio3D({
           guests={guests}
           members={members}
           whiteboard={whiteboard}
+          events={events}
           onControlsReady={handleControlsReady}
           onAgentClick={(agentId) => {
             const member = members.find((m) => m.id === agentId);
