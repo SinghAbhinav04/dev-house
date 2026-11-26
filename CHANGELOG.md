@@ -92,6 +92,10 @@ on the same machine.
   beside the memory inbox. Both comparisons now fold only what the filesystem
   folds. A relative path containing `..` is refused again, as it was before
   the gate moved to Node.
+- **A write through a symlink to nowhere is refused.** A symlink in the
+  project whose target does not exist yet looked like an ordinary new file, so
+  the gate allowed the write and the write created the target, wherever it
+  pointed. Present in the shell gate as well.
 
 ### Upgrading
 

@@ -233,7 +233,12 @@ function resolveFilePath(filePath, cwd) {
   }
   fp = join(realOr(dir), ...missing, basename(fp));
   // File-level symlinks. (Hardlinks are not detected — known limitation.)
-  if (existsSync(fp)) fp = realOr(fp);
+  if (existsSync(fp)) return realOr(fp);
+  // Nothing there, as far as following links goes. If the name itself is a
+  // link, its target is what does not exist yet, and the write would create
+  // that target wherever it points: ~/.bashrc as readily as a file in the
+  // project. existsSync() follows the link, so it cannot tell the two apart.
+  if (!isAbsent(fp)) return null;
   return fp;
 }
 

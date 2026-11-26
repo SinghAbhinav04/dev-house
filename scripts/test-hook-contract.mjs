@@ -68,10 +68,12 @@ symlinkSync(join(tempHome, 'nowhere'), join(projectDir, 'dangling'), 'junction')
 let fileLinkMade = true;
 try {
   symlinkSync(join(projectDir, 'index.html'), join(projectDir, 'filelink'), 'file');
+  // And one to a file that is not there yet, outside ~/Builds.
+  symlinkSync(join(outsideDir, 'not-there-yet.txt'), join(projectDir, 'danglefile'), 'file');
 } catch (error) {
   if (process.platform !== 'win32' || error?.code !== 'EPERM') throw error;
   fileLinkMade = false;
-  console.warn('*** SKIP "nor is a symlink to a file": this Windows account cannot create symlinks');
+  console.warn('*** SKIP the two cases that need a symlink to a file: this Windows account cannot create symlinks');
 }
 
 // Whether this filesystem treats two names that differ only in case as one
@@ -492,6 +494,11 @@ const checks = [
           name: 'nor is a symlink to a file',
           expect: 'deny',
           run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'filelink/x.js', content: 'x' } }),
+        },
+        {
+          name: 'a write through a symlink whose target does not exist yet is refused: it would create the target',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'danglefile', content: 'x' } }),
         },
       ]
     : []),
