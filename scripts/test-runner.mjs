@@ -179,7 +179,10 @@ const bootstrap = createCredentialBootstrap(
 assert.equal(bootstrap.source, 'macos-keychain');
 assert.equal(bootstrap.mountArgs.length, 2);
 assert.ok(bootstrap.mountArgs[1].includes('/home/node/.claude/.credentials.json:ro'));
-assert.match(readFileSync(bootstrap.mountArgs[1].split(':')[0], 'utf8'), /oauth_token/);
+// The host side of `host:container:ro`. Not split on ':' — a Windows host
+// path has a drive letter.
+const mountHostPath = bootstrap.mountArgs[1].slice(0, bootstrap.mountArgs[1].lastIndexOf(':/home/node/'));
+assert.match(readFileSync(mountHostPath, 'utf8'), /oauth_token/);
 const dockerArgs = buildDockerArgs({
   prompt: 'Reply with OK.',
   projectDir: '/tmp/project',
@@ -226,6 +229,11 @@ assert.ok(createRunner('auto') instanceof AutoRunner);
 {
   const stubDir = mkdtempSync(join(tmpdir(), 'runner-stdin-'));
   writeFileSync(join(stubDir, 'claude'), '#!/bin/sh\ncat >/dev/null\nexit 7\n', { mode: 0o755 });
+  // Windows cannot run a shell script, so the stub there is what npm installs:
+  // a .cmd shim pointing at a script. The runner sees through it to the script
+  // and runs that with node, which is the path a real npm install takes.
+  writeFileSync(join(stubDir, 'stub-cli.js'), "process.stdin.resume(); process.stdin.on('end', () => process.exit(7));\n");
+  writeFileSync(join(stubDir, 'claude.cmd'), '@ECHO off\r\n"%_prog%" "%dp0%\\stub-cli.js" %*\r\n');
 
   const spawned = new HostRunner().spawn({
     cli: 'claude',

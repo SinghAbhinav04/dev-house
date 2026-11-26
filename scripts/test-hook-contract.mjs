@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * Contract test for pipeline/.claude/hooks/approval-gate.sh.
+ * Contract test for pipeline/.claude/hooks/approval-gate.mjs.
  *
- * The hook is the security boundary, so this spawns the real shell script
+ * The hook is the security boundary, so this spawns the real hook with node
  * against a temp $HOME/Builds tree rather than testing a reimplementation.
+ * It used to be a bash + jq script; the checks are the ones that version
+ * passed, so the port is held to exactly the same contract on every OS.
  *
  * Since v3 the hook resolves identity through <project>/.claude/team-manifest.json
  * instead of a hardcoded agent-letter regex, so the fixture below is a
@@ -20,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const repoRoot = resolve(__dirname, '..');
-const hookPath = join(repoRoot, 'pipeline', '.claude', 'hooks', 'approval-gate.sh');
+const hookPath = join(repoRoot, 'pipeline', '.claude', 'hooks', 'approval-gate.mjs');
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'hackeroom-hook-'));
 const tempHome = join(tempRoot, 'home');
@@ -95,7 +97,7 @@ function invokeHook({ agent, toolName, toolInput = {}, cwd = projectDir, securit
     env.PIPELINE_AGENT = agent;
   }
 
-  const result = spawnSync('bash', [hookPath], { input: payload, encoding: 'utf8', env });
+  const result = spawnSync(process.execPath, [hookPath], { input: payload, encoding: 'utf8', env });
 
   return {
     status: result.status ?? -1,
@@ -119,10 +121,19 @@ function invokeHookRaw({ agent = 'reacty', input = '', delaySeconds = 0 }) {
     env.PIPELINE_AGENT = agent;
   }
 
+  // A late payload: a small node parent holds the hook's stdin open, writes
+  // after the delay, and exits with the hook's own status.
+  const delayed = [
+    "const { spawn } = require('node:child_process');",
+    "const child = spawn(process.execPath, [process.env.HOOK], { stdio: ['pipe', 'inherit', 'inherit'] });",
+    `setTimeout(() => { child.stdin.end(process.env.PAYLOAD); }, ${Math.round(delaySeconds * 1000)});`,
+    "child.on('exit', (code) => process.exit(code ?? 1));",
+  ].join(';');
+
   const result =
     delaySeconds > 0
-      ? spawnSync('bash', ['-c', `(sleep ${delaySeconds}; printf '%s' "$PAYLOAD") | bash "$HOOK"`], { encoding: 'utf8', env })
-      : spawnSync('bash', [hookPath], { input, encoding: 'utf8', env });
+      ? spawnSync(process.execPath, ['-e', delayed], { encoding: 'utf8', env })
+      : spawnSync(process.execPath, [hookPath], { input, encoding: 'utf8', env });
 
   return {
     status: result.status ?? -1,
@@ -577,7 +588,7 @@ const checks = [
   {
     name: 'bash:all still cannot modify hook files',
     expect: 'deny',
-    run: () => invokeHook({ agent: 'trusted', toolName: 'Bash', toolInput: { command: 'rm -f .claude/hooks/approval-gate.sh' }, securityMode: 'fast' }),
+    run: () => invokeHook({ agent: 'trusted', toolName: 'Bash', toolInput: { command: 'rm -f .claude/hooks/approval-gate.mjs' }, securityMode: 'fast' }),
   },
   {
     name: 'bash:all still cannot rewrite the team manifest',

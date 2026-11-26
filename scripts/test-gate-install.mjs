@@ -5,23 +5,26 @@
  *
  * The point of the self-test is not that the file was copied — it is that the
  * gate refuses what it should. The failures worth catching here all look
- * exactly like a working installation from the outside: a lost executable bit,
- * a missing `jq`, a shim edited into something that permits everything. So
+ * exactly like a working installation from the outside: a gate missing from
+ * the build, a shim edited into something that permits everything. So
  * these deliberately break the gate in each of those ways and assert the run
  * refuses to start.
  */
 
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const { installGates, GateInstallError } = await import(join(repoRoot, 'src/lib/cli/gates.ts'));
-const { antigravityCli } = await import(join(repoRoot, 'src/lib/cli/antigravity.ts'));
-const { claudeCli } = await import(join(repoRoot, 'src/lib/cli/claude.ts'));
-const { openCodeCli } = await import(join(repoRoot, 'src/lib/cli/opencode.ts'));
+// As file URLs: the ESM loader reads a bare Windows path (C:\...) as a
+// URL whose scheme is "c:".
+const load = (rel) => import(pathToFileURL(join(repoRoot, rel)).href);
+const { installGates, GateInstallError } = await load('src/lib/cli/gates.ts');
+const { antigravityCli } = await load('src/lib/cli/antigravity.ts');
+const { claudeCli } = await load('src/lib/cli/claude.ts');
+const { openCodeCli } = await load('src/lib/cli/opencode.ts');
 
 const pipelineDir = join(repoRoot, 'pipeline');
 
@@ -35,10 +38,10 @@ function makeProject() {
   writeFileSync(join(projectDir, 'pipeline-events.json'), JSON.stringify({ currentPhase: 'coding' }));
   writeFileSync(join(projectDir, 'plan.md'), '# plan\n');
 
-  // approval-gate.sh has to be in place: the shim is only a translator and
+  // approval-gate.mjs has to be in place: the shim is only a translator and
   // invokes it as its sibling.
-  const gate = join(projectDir, '.claude', 'hooks', 'approval-gate.sh');
-  writeFileSync(gate, readFileSync(join(pipelineDir, '.claude', 'hooks', 'approval-gate.sh'), 'utf8'), { mode: 0o755 });
+  const gate = join(projectDir, '.claude', 'hooks', 'approval-gate.mjs');
+  writeFileSync(gate, readFileSync(join(pipelineDir, '.claude', 'hooks', 'approval-gate.mjs'), 'utf8'), { mode: 0o755 });
 
   writeFileSync(
     join(projectDir, '.claude', 'team-manifest.json'),
@@ -77,8 +80,12 @@ check('installing writes hooks.json naming an ABSOLUTE command', () => {
     const entry = config.hackeroom.PreToolUse[0];
 
     assert.equal(entry.matcher, '*', 'without a catch-all there is no deny-by-default');
+    // POSIX: the shim's own path. Windows: "node.exe" "shim.mjs", since a .mjs
+    // cannot be executed by path there. Either way the script path is absolute.
+    const command = entry.hooks[0].command;
+    const scriptPath = command.startsWith('"') ? command.split('"').filter((part) => part.trim())[1] : command;
     assert.ok(
-      entry.hooks[0].command.startsWith('/'),
+      isAbsolute(scriptPath),
       // agy runs hooks from <project>/.agents, not the project root, so a
       // relative path would resolve against the wrong directory.
       'a relative command would not exist from where agy runs the hook',
@@ -89,16 +96,20 @@ check('installing writes hooks.json naming an ABSOLUTE command', () => {
   }
 });
 
-check('a gate that lost its executable bit is caught', () => {
+check('a build missing the approval gate itself is caught', () => {
   const { root, home, projectDir } = makeProject();
   const previousHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    chmodSync(join(projectDir, '.claude', 'hooks', 'approval-gate.sh'), 0o644);
+    // The shim is only a translator. Shipped without the gate it consults it
+    // would have nothing to ask, so the run must not start.
+    const fakeHooks = join(root, 'gateless', '.claude', 'hooks');
+    mkdirSync(fakeHooks, { recursive: true });
+    copyFileSync(join(pipelineDir, '.claude', 'hooks', 'gate-antigravity.mjs'), join(fakeHooks, 'gate-antigravity.mjs'));
     assert.throws(
-      () => installGates(projectDir, pipelineDir, [antigravityCli], 'reacty'),
+      () => installGates(projectDir, join(root, 'gateless'), [antigravityCli], 'reacty'),
       GateInstallError,
-      'an unrunnable gate must stop the run, not be discovered mid-build',
+      'a gate that is not there must stop the run, not be discovered mid-build',
     );
   } finally {
     process.env.HOME = previousHome;
@@ -118,7 +129,9 @@ check('a gate that lost its executable bit is caught', () => {
 function makeSabotagedBuild(root, body) {
   const fakePipeline = join(root, 'fake-pipeline', '.claude', 'hooks');
   mkdirSync(fakePipeline, { recursive: true });
-  writeFileSync(join(fakePipeline, 'gate-antigravity.sh'), body, { mode: 0o755 });
+  writeFileSync(join(fakePipeline, 'gate-antigravity.mjs'), body, { mode: 0o755 });
+  // The real gate, so the only thing wrong with this build is the shim.
+  copyFileSync(join(pipelineDir, '.claude', 'hooks', 'approval-gate.mjs'), join(fakePipeline, 'approval-gate.mjs'));
   return join(root, 'fake-pipeline');
 }
 
@@ -130,7 +143,7 @@ check('a shim that permits everything is caught', () => {
     // The failure this whole self-test exists for: a gate that is present,
     // executable, parses cleanly, and quietly allows everything. An existence
     // check would call this a successful installation.
-    const build = makeSabotagedBuild(root, '#!/bin/bash\nexit 0\n');
+    const build = makeSabotagedBuild(root, 'process.exit(0);\n');
 
     assert.throws(
       () => installGates(projectDir, build, [antigravityCli], 'reacty'),
@@ -150,7 +163,7 @@ check('a shim that refuses EVERYTHING is also caught', () => {
   try {
     // Refusing everything would satisfy a deny-only self-test while making the
     // CLI useless, so the allow case is checked too.
-    const build = makeSabotagedBuild(root, '#!/bin/bash\necho \'{"decision":"deny","reason":"no"}\'\nexit 0\n');
+    const build = makeSabotagedBuild(root, 'console.log(JSON.stringify({ decision: "deny", reason: "no" }));\n');
 
     assert.throws(
       () => installGates(projectDir, build, [antigravityCli], 'reacty'),

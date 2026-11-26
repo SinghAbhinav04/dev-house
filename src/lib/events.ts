@@ -42,6 +42,13 @@ const STYLES: Record<string, EventStyle> = {
   tool_result: { tone: 'muted', tag: '  ↳', prose: false },
   text: { tone: 'text', tag: '', prose: true },
   user_msg: { tone: 'user', tag: 'YOU', prose: true },
+  ticket_created: { tone: 'accent', tag: 'TICKET', prose: false },
+  ticket_moved: { tone: 'info', tag: 'MOVE', prose: false },
+  ticket_assigned: { tone: 'accent', tag: 'ASSIGN', prose: false },
+  board_write: { tone: 'muted', tag: 'BOARD', prose: false },
+  call_member: { tone: 'accent', tag: 'CALL', prose: false },
+  qa_question: { tone: 'warning', tag: 'QA ASK', prose: true },
+  qa_answer: { tone: 'success', tag: 'DEV', prose: true },
 };
 
 const FALLBACK: EventStyle = { tone: 'muted', tag: '', prose: false };

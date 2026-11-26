@@ -96,7 +96,7 @@ assert.match(page, /const auditHasStarted = auditPanelDue\(\{/, 'the panel is sh
 assert.ok(!/auditHasStarted = !!\(\s*activeRunFinalAudit/.test(page), 'and no longer by a setting');
 assert.ok(!page.includes('selectedRunFinalAudit'), 'the switch the orchestrator ignored is gone');
 assert.match(page, /const auditStaffed = !!auditorId;/, 'whether the audit will run is read from the roster');
-assert.equal(page.match(/runFinalAudit: auditStaffed,/g)?.length, 5, 'and that is what every request is told');
+assert.equal(page.match(/runFinalAudit: auditStaffed,/g)?.length, 6, 'and that is what every request is told');
 assert.match(page, /gridTemplateColumns: grid\.columns,\s*\n\s*gridTemplateRows: grid\.rows,/, 'the grid takes its tracks from officeGrid');
 assert.ok(!page.includes("gridTemplateRows: '1fr 1fr'"), 'the fixed two rows are gone');
 assert.match(page, /officeGrid\(panelWorkers\.length, /, 'sized by the panels actually drawn');

@@ -32,7 +32,7 @@ import type { TokenUsage } from '../team/usage.ts';
  * The tool vocabulary events are reported in.
  *
  * Claude Code's own names, used as the canonical set. That is a deliberate
- * choice rather than a default: `approval-gate.sh` matches on these strings and
+ * choice rather than a default: `approval-gate.mjs` matches on these strings and
  * has 54 contract tests pinned to them, so a second CLI translating *into* this
  * vocabulary costs one mapping table, while translating everything into a new
  * neutral vocabulary would cost the gate and its tests.

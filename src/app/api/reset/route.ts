@@ -1,14 +1,14 @@
 import { emptyBreakdown } from '@/lib/team/usage';
 import { rmSync, existsSync, readdirSync, readFileSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { buildsDir } from '@/lib/platform';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   clearApprovedBashGrant,
   clearPendingApproval,
 } from '@/lib/pipeline-approval';
 
-const BUILDS_DIR = join(homedir(), 'Builds');
+const BUILDS_DIR = buildsDir();
 const STAGING_DIR = join(BUILDS_DIR, '.staging');
 const MANUAL_DIR = join(BUILDS_DIR, '.manual');
 

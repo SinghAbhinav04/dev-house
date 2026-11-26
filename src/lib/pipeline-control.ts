@@ -1,7 +1,7 @@
-import { spawn, execFileSync, type ChildProcess } from 'child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
+import { spawn, type ChildProcess } from 'child_process';
+import { randomUUID } from 'crypto';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'fs';
 import { join, resolve } from 'path';
-import { homedir } from 'os';
 
 import { readRoster } from './team/roster.ts';
 import { resolveSlot } from './team/slots.ts';
@@ -10,6 +10,16 @@ import { writeJsonAtomic } from './atomic-write.ts';
 import { installGates } from './cli/gates.ts';
 import { findCli } from './cli/registry.ts';
 import type { AgentCli } from './cli/types.ts';
+import {
+  ORCHESTRATOR_PID_FILE,
+  RUN_TOKEN_ENV,
+  clearOrchestratorRecord,
+  orchestratorLiveness,
+  orchestratorPidPath,
+  readOrchestratorRecord,
+  recordOrchestrator,
+} from './orchestrator-liveness.ts';
+import { buildsDir, killProcessTree, makeExecutable, tsxCommand } from './platform.ts';
 
 /** Event author for orchestrator-side supervisor narration. */
 function supervisorEventAgent(): string {
@@ -17,7 +27,7 @@ function supervisorEventAgent(): string {
 }
 
 export const BUILDUI_DIR = resolve(process.cwd(), 'pipeline');
-export const BUILDS_DIR = join(homedir(), 'Builds');
+export const BUILDS_DIR = buildsDir();
 export const STAGING_DIR = join(BUILDS_DIR, '.staging');
 
 export type SecurityMode = 'fast' | 'strict';
@@ -103,77 +113,38 @@ export function appendPipelineEvent(
 //   - direct chat turns are children of this server process, tracked in memory.
 
 /**
- * Lives in `.claude/` because no member can write there. In the project root
- * a coder could point it at any process group the user owns and have the next
- * Stop signal that instead.
+ * The pid record lives in `.claude/`, because no member can write there. In
+ * the project root a coder could point it at any process the user owns and
+ * have the next Stop signal that instead. See orchestrator-liveness.ts for how
+ * a record is confirmed to still be ours before anything is signalled.
  */
-export const ORCHESTRATOR_PID_FILE = 'orchestrator.pid';
+export { ORCHESTRATOR_PID_FILE, orchestratorPidPath };
 
-export function orchestratorPidPath(projectDir: string): string {
-  return join(projectDir, '.claude', ORCHESTRATOR_PID_FILE);
-}
-
-export function recordOrchestratorPid(projectDir: string, pid: number): void {
-  mkdirSync(join(projectDir, '.claude'), { recursive: true });
-  writeFileSync(orchestratorPidPath(projectDir), `${pid}\n`);
-}
-
+/** Kept for callers that only want the number. */
 export function readOrchestratorPid(projectDir: string): number | null {
-  const file = orchestratorPidPath(projectDir);
-  if (!existsSync(file)) return null;
+  return readOrchestratorRecord(projectDir)?.pid ?? null;
+}
 
-  const pid = Number(readFileSync(file, 'utf8').trim());
-  // Never 0 or 1 or anything negative: as a group id those mean "my own
-  // group" and "everything I am allowed to signal".
-  return Number.isInteger(pid) && pid > 1 ? pid : null;
+/** Record a freshly spawned orchestrator with the run token it was given. */
+export function recordOrchestratorPid(projectDir: string, pid: number, token: string = ''): void {
+  recordOrchestrator(projectDir, pid, token);
 }
 
 /**
- * Whether a process group is still an orchestrator.
+ * Stop a process tree: the orchestrator and every member turn it has in
+ * flight. Returns whether there was anything left to stop.
  *
- * A recorded id outlives the run it belonged to, and ids are reused. Signalling
- * a stale one would hit whatever unrelated group inherited the number, so the
- * group has to still contain the thing we started before it is touched.
- *
- * `pgrep -g` rather than reading the whole process table out of `ps`: the
- * table on a busy machine runs past execFileSync's output buffer, and the
- * question only ever concerns one group.
+ * It can exit between being found and being signalled - a run that finishes
+ * as Stop is pressed does exactly that. That is the outcome Stop wanted, so it
+ * is not an error.
  */
-export function isOrchestratorGroup(pgid: number): boolean {
-  try {
-    execFileSync('pgrep', ['-g', String(pgid), '-f', 'orchestrator\\.ts'], { stdio: 'ignore' });
-    return true;
-  } catch (err) {
-    // 1 is pgrep saying nothing matched. Anything else is pgrep itself
-    // failing, which must not be read as "the run has already gone".
-    if ((err as { status?: number }).status === 1) return false;
-    throw err;
-  }
-}
-
-/** Signal the orchestrator this project recorded, and only that. */
-/**
- * Send SIGTERM to a whole process group: the orchestrator and every member
- * turn it has in flight. Returns whether there was anything left to signal.
- *
- * The group can exit between being found and being signalled - a run that
- * finishes as Stop is pressed does exactly that - and the kill then fails with
- * ESRCH. That is the outcome Stop wanted, so it is not an error.
- */
-export function signalOrchestratorGroup(pgid: number): boolean {
-  try {
-    // Negative: the group, not the one process.
-    process.kill(-pgid, 'SIGTERM');
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
-    throw err;
-  }
+export function signalOrchestratorGroup(pid: number): boolean {
+  return killProcessTree(pid);
 }
 
 function describeFailure(err: unknown): string {
   const failure = err as NodeJS.ErrnoException & { path?: string };
-  if (failure.code === 'ENOENT' && failure.path === 'pgrep') return 'pgrep is not installed';
+  if (failure.code === 'ENOENT' && failure.path) return `${failure.path} is not installed`;
   return failure.message || String(err);
 }
 
@@ -186,31 +157,30 @@ function describeFailure(err: unknown): string {
  * run marked as running with nothing to press.
  */
 function stopOrchestrator(projectDir: string): string | null {
-  const pgid = readOrchestratorPid(projectDir);
-  if (pgid === null) {
+  const record = readOrchestratorRecord(projectDir);
+  if (!record) {
     console.warn(`*** No orchestrator is recorded for ${projectDir}, so nothing was signalled.`);
     return null;
   }
 
-  let running: boolean;
-  try {
-    running = isOrchestratorGroup(pgid);
-  } catch (err) {
-    // The record is kept, so a later Stop can try again once the cause is fixed.
-    return `Could not check whether the orchestrator is still running (${describeFailure(err)}), so it was not signalled. It may still be running as process group ${pgid}.`;
+  const verdict = orchestratorLiveness(projectDir);
+  if (verdict === 'unverified') {
+    // Recorded by an older version, with no token to check. The record is
+    // kept so the user can see what may still be running.
+    return `The orchestrator recorded as process ${record.pid} was started by an older version and cannot be confirmed as this run, so it was not signalled. It may still be running.`;
   }
 
-  if (running) {
+  if (verdict === 'running') {
     try {
-      signalOrchestratorGroup(pgid);
+      signalOrchestratorGroup(record.pid);
     } catch (err) {
-      return `Could not signal the orchestrator (${describeFailure(err)}). It may still be running as process group ${pgid}.`;
+      return `Could not stop the orchestrator (${describeFailure(err)}). It may still be running as process ${record.pid}.`;
     }
   } else {
-    console.warn(`*** Process group ${pgid} recorded for ${projectDir} is no longer an orchestrator; not signalled.`);
+    console.warn(`*** Process ${record.pid} recorded for ${projectDir} is no longer this run's orchestrator; not signalled.`);
   }
 
-  rmSync(orchestratorPidPath(projectDir), { force: true });
+  clearOrchestratorRecord(projectDir);
   return null;
 }
 
@@ -251,26 +221,37 @@ function stopDirectTurns(): number {
 
 function spawnOrchestrator(projectDir: string, securityMode: SecurityMode, aSession?: string, permissionMode?: PermissionMode) {
   const orchestratorPath = join(BUILDUI_DIR, 'orchestrator.ts');
-  const args = ['tsx', orchestratorPath, '--project-dir', projectDir];
-  if (aSession) args.push('--a-session', aSession);
+  const orchestratorArgs = ['--project-dir', projectDir];
+  if (aSession) orchestratorArgs.push('--a-session', aSession);
 
-  const env: NodeJS.ProcessEnv = { ...process.env, PIPELINE_SECURITY_MODE: securityMode };
+  // A fresh token per run. The orchestrator writes it to its heartbeat, which
+  // is how Stop later knows the recorded pid is still this run.
+  const token = randomUUID();
+  const env: NodeJS.ProcessEnv = { ...process.env, PIPELINE_SECURITY_MODE: securityMode, [RUN_TOKEN_ENV]: token };
   if (permissionMode) env.PIPELINE_PERMISSION_MODE = permissionMode;
 
-  const child = spawn('npx', args, {
+  // tsx is run with this node binary, never through `npx`: npx is a shell
+  // script on POSIX and a .cmd on Windows, and would fetch tsx from the network
+  // when it is missing.
+  const { command, args } = tsxCommand(orchestratorPath, orchestratorArgs, resolve(BUILDUI_DIR, '..'));
+
+  const child = spawn(command, args, {
     cwd: projectDir,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // POSIX: leader of a new process group, so Stop can signal the whole run.
+    // Windows: a new process tree that taskkill /T can end; windowsHide keeps
+    // it from opening a console window.
     detached: true,
+    windowsHide: true,
     env,
   });
 
   child.stdout?.on('data', (data) => process.stdout.write(data));
   child.stderr?.on('data', (data) => process.stderr.write(data));
+  child.on('error', (err) => console.error(`*** Could not start the orchestrator: ${err.message}`));
   child.unref();
 
-  // `detached` made this child the leader of a new process group, so its pid
-  // is the id of the group that Stop will signal.
-  if (child.pid !== undefined) recordOrchestratorPid(projectDir, child.pid);
+  if (child.pid !== undefined) recordOrchestratorPid(projectDir, child.pid, token);
 }
 
 export function startPipelineRun(options: {
@@ -333,14 +314,13 @@ export function startPipelineRun(options: {
 
   mkdirSync(join(projectDir, '.claude', 'hooks'), { recursive: true });
   const settingsSrc = join(BUILDUI_DIR, '.claude', 'settings.json');
-  const hookSrc = join(BUILDUI_DIR, '.claude', 'hooks', 'approval-gate.sh');
+  const hookSrc = join(BUILDUI_DIR, '.claude', 'hooks', 'approval-gate.mjs');
   if (existsSync(settingsSrc)) copyFileSync(settingsSrc, join(projectDir, '.claude', 'settings.json'));
-  if (existsSync(hookSrc)) {
-    copyFileSync(hookSrc, join(projectDir, '.claude', 'hooks', 'approval-gate.sh'));
-    try {
-      execFileSync('chmod', ['+x', join(projectDir, '.claude', 'hooks', 'approval-gate.sh')]);
-    } catch {}
+  if (!existsSync(hookSrc)) {
+    return { success: false, error: `The approval gate is missing from this build (${hookSrc}).` };
   }
+  copyFileSync(hookSrc, join(projectDir, '.claude', 'hooks', 'approval-gate.mjs'));
+  makeExecutable(join(projectDir, '.claude', 'hooks', 'approval-gate.mjs'));
 
   // The hook resolves each member's capabilities from this manifest. It is
   // written here and never by an agent — .claude/ is unwritable from inside a

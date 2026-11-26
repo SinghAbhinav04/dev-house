@@ -32,6 +32,7 @@
     "test:roster": "node --experimental-strip-types scripts/test-roster.mjs",
     "test:slots": "node --experimental-strip-types scripts/test-slots.mjs",
     "team": "node --experimental-strip-types scripts/team.mjs",
+    "demo:replay": "node --experimental-strip-types --no-warnings scripts/demo-replay.mjs",
     "test:memory": "node --experimental-strip-types scripts/test-memory.mjs",
     "test:usage": "node --experimental-strip-types scripts/test-usage.mjs"
   },
@@ -45,13 +46,17 @@
     "react-dom": "19.3.1",
     "react-markdown": "^10.1.0",
     "recharts": "^3.11.0",
-    "remark-breaks": "^4.0.0"
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "4.0.1",
+    "three": "^0.187.0",
+    "tsx": "^4.20.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.5",
     "@types/node": "^22.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.187.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.6",
     "sharp": "^0.35.5",

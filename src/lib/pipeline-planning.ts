@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 
+import { OUTLINE_FIRST_INSTRUCTION, teamSectionInstruction } from './workflow.ts';
+
 export type PlanningStep = 'research' | 'write' | 'self-review' | 'done';
 
 export interface PlanningEventLike {
@@ -104,12 +106,14 @@ export function buildPlanningResearchResumePrompt(): string {
   ].join(' ');
 }
 
-export function buildPlanningWritePrompt(projectDir: string, researchSummary?: string | null): string {
+export function buildPlanningWritePrompt(projectDir: string, researchSummary?: string | null, team?: string): string {
   return [
     'Research is already complete in this session.',
     researchSummary ? `Verified research summary from the completed research pass:\n\n${researchSummary}\n` : '',
     `Write the full build plan to ${join(projectDir, 'plan.md')} now.`,
     'Use the Write tool on plan.md in your next tool action. Do not narrate that you are about to write it; actually write it.',
+    OUTLINE_FIRST_INSTRUCTION,
+    team ? teamSectionInstruction(team) : '',
     'The plan must contain complete, copy-pasteable code for every file the coder will need.',
     'Do not do more research unless a specific missing fact blocks the write.',
     'When the draft plan is written, say "Draft written" and stop.',

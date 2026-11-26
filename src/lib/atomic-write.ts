@@ -21,10 +21,11 @@ import { renameSync, unlinkSync, writeFileSync } from 'fs';
  * append-only event log, not a better write call.
  */
 export function writeJsonAtomic(file: string, data: unknown): void {
-  const tmp = `${file}.tmp`;
+  // Per process, so two writers never share (and clobber) one temp file.
+  const tmp = `${file}.${process.pid}.tmp`;
   try {
     writeFileSync(tmp, JSON.stringify(data, null, 2));
-    renameSync(tmp, file);
+    renameWithRetry(tmp, file);
   } catch (err) {
     // Never leave the temp file behind — the directory is user-visible, and a
     // stray `pipeline-events.json.tmp` reads like a crash even when the write
@@ -33,5 +34,28 @@ export function writeJsonAtomic(file: string, data: unknown): void {
       unlinkSync(tmp);
     } catch {}
     throw err;
+  }
+}
+
+const RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * On Windows, replacing a file fails with EPERM or EBUSY while any other
+ * process has it open, and the SSE stream reads the state file four times a
+ * second, so a plain rename lost writes there at random. The reader holds it
+ * for microseconds, so a short bounded retry is enough. POSIX never hits this.
+ */
+function renameWithRetry(from: string, to: string): void {
+  const deadline = Date.now() + 500;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (process.platform !== 'win32' || !RETRYABLE.has(code) || Date.now() > deadline) throw err;
+      // Synchronous wait: callers are synchronous by design.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(5 * (attempt + 1), 25));
+    }
   }
 }

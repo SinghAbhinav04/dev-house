@@ -18,7 +18,7 @@ You are part of a dev team:
 
 1. Receive the approved plan from A. Read the entire plan.
 2. Read `checklist.md` if it exists so you understand the team's implementation contract.
-3. Build exactly what the plan says — every file, every modification, every special case.
+3. Build exactly what the plan says — every file, every modification, every special case. The work arrives as tickets, one at a time; finish the ticket you are given and keep everything from earlier tickets working.
 4. If you hit something unexpected at implementation time, ask `A` before guessing.
 5. When you're done building, send the code to `D`.
 6. `D` will review the code against the plan. If `D` has issues, fix them and send back.

@@ -81,6 +81,12 @@ assert.equal(
 assert.equal(describeCurrentTask('tester', 'testing'), 'Running the build and testing it');
 assert.equal(describeCurrentTask('coder', 'testing'), 'Fixing failing tests');
 assert.match(describeCurrentTask('coder', 'some-new-phase'), /some-new-phase/, 'an unknown phase still says something');
+assert.equal(
+  describeCurrentTask('coder', 'coding', { id: 'DH-3', title: 'Board UI' }),
+  'DH-3 Board UI — Writing code from the approved plan',
+  'the ticket a member is on leads its status line',
+);
+assert.ok(describeCurrentTask('coder', 'coding', { id: 'DH-3', title: 'x'.repeat(200) }).length < 120);
 
 // ── Runtime migration ────────────────────────────────────────────────
 

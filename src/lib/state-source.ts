@@ -6,13 +6,14 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { EMPTY_RUNTIME, normalizeRuntime } from './pipeline-runtime.ts';
 import { emptyBreakdown, normalizeUsage } from './team/usage.ts';
+import { normalizeBoard, normalizeTickets } from './tickets.ts';
+import { buildsDir } from './platform.ts';
 
-export const BUILDS_DIR = join(homedir(), 'Builds');
+export const BUILDS_DIR = buildsDir();
 export const STAGING_DIR = join(BUILDS_DIR, '.staging');
 export const MANUAL_DIR = join(BUILDS_DIR, '.manual');
 
@@ -36,6 +37,8 @@ export const EMPTY_STATE = {
   auditFindings: [],
   auditDeployPending: false,
   auditActionInFlight: false,
+  tickets: [],
+  board: {},
 };
 
 const VALID_RESUME_ACTIONS = [
@@ -89,6 +92,8 @@ export function normalizeState(data: Record<string, unknown>) {
     auditFindings: Array.isArray(data.auditFindings) ? data.auditFindings : [],
     auditDeployPending: data.auditDeployPending === true,
     auditActionInFlight: data.auditActionInFlight === true,
+    tickets: normalizeTickets(data.tickets),
+    board: normalizeBoard(data.board),
   };
 }
 

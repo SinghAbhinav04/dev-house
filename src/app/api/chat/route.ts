@@ -1,6 +1,5 @@
 import { readFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
-import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { NextRequest, NextResponse } from 'next/server';
 import {
@@ -10,6 +9,8 @@ import {
   type RunnerOptions,
 } from '../../../../pipeline/runner.ts';
 import { EMPTY_RUNTIME } from '@/lib/pipeline-runtime';
+import { getStagingState, idleStatusForRoster } from '@/lib/staging';
+import { buildsDir } from '@/lib/platform';
 import { writeJsonAtomic } from '@/lib/atomic-write';
 import { readPendingApproval } from '@/lib/pipeline-approval';
 import { buildSupervisorSnapshot, getSupervisorRecommendation } from '@/lib/pipeline-supervisor';
@@ -44,7 +45,7 @@ import {
 } from '@/lib/team/usage';
 
 const BUILDUI_DIR = resolve(process.cwd(), 'pipeline');
-const BUILDS_DIR = join(homedir(), 'Builds');
+const BUILDS_DIR = buildsDir();
 const STAGING_DIR = join(BUILDS_DIR, '.staging');
 const MANUAL_DIR = join(BUILDS_DIR, '.manual');
 /**
@@ -72,15 +73,6 @@ function roleLabel(roster: Roster, agent: string): string {
   return member.slot ? SLOT_LABELS[member.slot].toLowerCase() : member.title || member.name;
 }
 
-/** A fresh idle status map keyed by the members currently on the team. */
-function idleStatusForRoster(roster: Roster): Record<string, string> {
-  const status: Record<string, string> = {};
-  for (const member of roster.members) {
-    if (member.enabled) status[member.id] = 'idle';
-  }
-  return status;
-}
-
 /**
  * Manual mode deliberately does not use a member's full role file — sessions
  * there are loose and user-directed. A one-line prompt derived from the
@@ -105,29 +97,6 @@ function getManualState(): Record<string, unknown> {
   const fresh: Record<string, unknown> = {
     concept: '',
     projectDir: MANUAL_DIR,
-    currentPhase: 'concept',
-    securityMode: 'fast',
-    activeAgent: '',
-    agentStatus: idleStatusForRoster(readRoster()),
-    sessions: {},
-    buildComplete: false,
-    usage: emptyBreakdown(),
-    runtime: { ...EMPTY_RUNTIME },
-    events: [],
-  };
-  writeJsonAtomic(eventsFile, fresh);
-  return fresh;
-}
-
-function getStagingState(): Record<string, unknown> {
-  const eventsFile = join(STAGING_DIR, 'pipeline-events.json');
-  if (existsSync(eventsFile)) {
-    try { return JSON.parse(readFileSync(eventsFile, 'utf8')); } catch {}
-  }
-  mkdirSync(STAGING_DIR, { recursive: true });
-  const fresh: Record<string, unknown> = {
-    concept: '',
-    projectDir: '',
     currentPhase: 'concept',
     securityMode: 'fast',
     activeAgent: '',
@@ -236,6 +205,14 @@ function streamClaude(
     // pattern-matching every process on the machine.
     const child = trackDirectTurn(runner.spawn(opts));
     const canFallbackToHost = child.backend === 'docker' && runner.supportsHostFallback(opts);
+
+    // Busy while the turn runs, in either mode, so the studio shows them
+    // typing at their desk; set back to idle when the process closes.
+    try {
+      const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
+      s.agentStatus = { ...(s.agentStatus || {}), [agent]: 'active' };
+      writeJsonAtomic(eventsFile, s);
+    } catch {}
 
     if (child.backend === 'docker') {
       try {

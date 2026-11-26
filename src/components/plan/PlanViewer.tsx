@@ -3,6 +3,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
+import remarkGfm from 'remark-gfm';
+
+import { softenBreaks } from '@/lib/markdown-breaks';
 
 import { MarkdownText } from '@/components/shared/MarkdownText';
 
@@ -80,7 +83,7 @@ export function PlanMarkdown({ content }: { content: string }) {
   return (
     <div className="space-y-3 text-sm leading-relaxed text-ink-soft">
       <ReactMarkdown
-        remarkPlugins={[remarkBreaks]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
           h1: ({ children }) => <h1 className="mt-5 text-lg font-semibold text-ink">{children}</h1>,
           h2: ({ children }) => <h2 className="mt-5 border-b border-line pb-1 text-base font-semibold text-ink">{children}</h2>,
@@ -122,7 +125,7 @@ export function PlanMarkdown({ content }: { content: string }) {
           },
         }}
       >
-        {content}
+        {softenBreaks(content)}
       </ReactMarkdown>
     </div>
   );

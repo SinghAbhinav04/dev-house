@@ -95,7 +95,7 @@ export interface CliSupport {
  * Translation between a CLI's tool names and the ones this codebase uses.
  *
  * The canonical set is Claude Code's own. That is a deliberate choice rather
- * than an accident of history: `approval-gate.sh` matches on those exact
+ * than an accident of history: `approval-gate.mjs` matches on those exact
  * strings and has contract tests pinned to them, so a new CLI translating
  * *into* the vocabulary costs one table, while moving everything to a new
  * neutral vocabulary would cost the gate and every test that guards it.

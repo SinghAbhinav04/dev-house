@@ -1,17 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = join(repoRoot, 'scripts', 'fixtures');
 
-const { createOpencodeDecoder } = await import(join(repoRoot, 'src/lib/cli/opencode-decoder.ts'));
-const { openCodeCli } = await import(join(repoRoot, 'src/lib/cli/opencode.ts'));
+// The ESM loader reads a bare Windows path as a URL with the scheme "c:".
+const fileUrl = (path) => pathToFileURL(path).href;
+const { createOpencodeDecoder } = await import(fileUrl(join(repoRoot, 'src/lib/cli/opencode-decoder.ts')));
+const { openCodeCli } = await import(fileUrl(join(repoRoot, 'src/lib/cli/opencode.ts')));
 const { OPENCODE_TOOLS, toCanonicalArgs, isMappedOpencodeTool, OPENCODE_ARG_SENSITIVE_TOOLS } =
-  await import(join(repoRoot, 'src/lib/cli/opencode-tools.ts'));
+  await import(fileUrl(join(repoRoot, 'src/lib/cli/opencode-tools.ts')));
 
 function decodeAll(lines) {
   const decoder = createOpencodeDecoder();
@@ -141,7 +143,8 @@ const withSkills = openCodeCli.spawnEnv(
 );
 assert.deepEqual(
   JSON.parse(withSkills.OPENCODE_CONFIG_CONTENT).skills.paths,
-  ['/home/me/.hackeroom/members/pat/plugin/skills'],
+  // join, as the adapter does: native separators, so backslashes on Windows.
+  [join('/home/me/.hackeroom/members/pat/plugin', 'skills')],
   'the member is pointed at its own skills where they already live',
 );
 
@@ -195,16 +198,23 @@ assert.equal(
     ],
   };
   writeFileSync(join(stubDir, 'payload.json'), JSON.stringify(bigSession));
-  writeFileSync(
-    join(stubDir, 'opencode'),
+
+  // One stub per platform: a shell script on POSIX, and on Windows what npm
+  // installs — a .cmd shim the adapter sees through to a node script.
+  const writeStub = (posix, js) => {
+    writeFileSync(join(stubDir, 'opencode'), posix, { mode: 0o755 });
+    writeFileSync(join(stubDir, 'stub-oc.js'), js);
+    writeFileSync(join(stubDir, 'opencode.cmd'), '@ECHO off\r\n"%_prog%" "%dp0%\\stub-oc.js" %*\r\n');
+  };
+  writeStub(
     `#!/bin/sh\n/bin/cat "${join(stubDir, 'payload.json')}"\n`,
-    { mode: 0o755 },
+    `process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(join(stubDir, 'payload.json'))}));\n`,
   );
 
   // Prepended, not replacing: the stub has to win over a real `opencode` on
   // this machine, while the shell it runs still needs its own PATH.
   const path = process.env.PATH;
-  process.env.PATH = `${stubDir}:${path}`;
+  process.env.PATH = `${stubDir}${delimiter}${path}`;
   try {
     const big = openCodeCli.fetchTurnResult('ses_big', stubDir);
     assert.equal(big.text, 'APPROVED', 'a 200KB export comes back whole, not cut at the pipe buffer');
@@ -213,14 +223,14 @@ assert.equal(
     assert.equal(big.error, undefined);
 
     // A CLI that fails must not look like a member with nothing to say.
-    writeFileSync(join(stubDir, 'opencode'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+    writeStub('#!/bin/sh\nexit 3\n', 'process.exit(3);\n');
     const failed = openCodeCli.fetchTurnResult('ses_big', stubDir);
     assert.equal(failed.text, '');
     assert.equal(failed.usage, undefined, 'unknown spend stays unknown rather than banking as free');
     assert.ok(failed.error, 'and the run is told why');
 
     // Output that is not JSON at all — which is what truncation looked like.
-    writeFileSync(join(stubDir, 'opencode'), '#!/bin/sh\n/bin/echo -n \'{"info":{"id":"ses\'\n', { mode: 0o755 });
+    writeStub('#!/bin/sh\n/bin/echo -n \'{"info":{"id":"ses\'\n', 'process.stdout.write(\'{"info":{"id":"ses\');\n');
     const cut = openCodeCli.fetchTurnResult('ses_big', stubDir);
     assert.equal(cut.text, '');
     assert.equal(cut.usage, undefined);
@@ -331,14 +341,14 @@ writeFileSync(
     },
   })
 );
-for (const file of ['approval-gate.sh', 'gate-opencode.mjs']) {
+for (const file of ['approval-gate.mjs', 'gate-opencode.mjs']) {
   writeFileSync(join(hooksDir, file), readFileSync(join(repoRoot, 'pipeline', '.claude', 'hooks', file), 'utf8'), { mode: 0o755 });
 }
 
 const shim = join(hooksDir, 'gate-opencode.mjs');
 
 function ask({ tool, args = {}, member = 'reacty', securityMode = 'fast' }) {
-  const out = spawnSync('node', [shim], {
+  const out = spawnSync(process.execPath, [shim], {
     input: JSON.stringify({ tool, args, cwd: projectDir }),
     encoding: 'utf8',
     cwd: projectDir,

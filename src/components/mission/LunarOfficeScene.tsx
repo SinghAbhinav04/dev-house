@@ -20,7 +20,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { PixelSprite } from './PixelSprite';
-import { shortModelLabel } from '@/lib/team/types';
+import { MemberStatCard, type OfficeMember } from './MemberStatCard';
+export type { OfficeMember };
 
 export type WorkerId = 'planner' | 'reviewer' | 'coder' | 'tester' | 'supervisor' | 'auditor';
 
@@ -38,11 +39,6 @@ export type SeatMap = Partial<Record<WorkerId, SeatOccupant>>;
 
 /**
  * Where a member with no desk of their own ends up.
- *
- * A desk belongs to a slot, so a second member assigned to the same slot — or
- * a member with no slot at all — has nowhere of their own to sit. They take an
- * empty desk if the team has one, and the couch with a laptop if it does not.
- * When the desk's own slot is filled, the guest gives it up and moves.
  */
 const guestSeats: Array<WorkerPos> = [
   // the green couch, then its two armchairs
@@ -63,19 +59,6 @@ const guestSeats: Array<WorkerPos> = [
 
 /** Sprite sheets guests borrow, so a fifth member is not invisible. */
 const guestSprites: WorkerId[] = ['planner', 'coder', 'reviewer', 'tester', 'auditor', 'supervisor'];
-
-/** The slice of a roster member the office needs in order to describe them. */
-export interface OfficeMember {
-  id: string;
-  name: string;
-  color: string;
-  model: string;
-  billable: number;
-  usage: { totalCostUsd: number };
-  tokenBudget?: number;
-  currentTask: string;
-  startedAt: string;
-}
 
 type Facing = 'front' | 'left' | 'right' | 'back';
 
@@ -948,113 +931,6 @@ function Worker({
         bottom: 52,
         width: 150
       }}>{speech}<div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-black/85" /></motion.div>}</AnimatePresence></div>;
-}
-/** Uptime on the current turn. Idle members have none to report. */
-function uptimeLabel(startedAt: string, now: number, isActive: boolean): string {
-  if (!isActive || !startedAt) return '—';
-  const started = new Date(startedAt).getTime();
-  if (Number.isNaN(started)) return '—';
-
-  const seconds = Math.max(0, Math.floor((now - started) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-
-/**
- * Energy is budget headroom. With no budget there is nothing to deplete, so it
- * says so rather than showing a full bar that never moves.
- */
-function energyLabel(stats: OfficeMember): { text: string; pct: number | null } {
-  if (!stats.tokenBudget || stats.tokenBudget <= 0) return { text: 'unlimited', pct: null };
-  const left = Math.max(0, stats.tokenBudget - stats.billable);
-  const pct = Math.round((left / stats.tokenBudget) * 100);
-  return { text: `${pct}%`, pct };
-}
-
-function compactTokens(value: number): string {
-  if (value < 1000) return String(value);
-  if (value < 1_000_000) return `${(value / 1000).toFixed(1)}k`;
-  return `${(value / 1_000_000).toFixed(2)}M`;
-}
-
-function MemberStatCard({
-  stats,
-  x,
-  y,
-  isActive,
-  now,
-  pinned = false,
-}: {
-  stats: OfficeMember;
-  x: number;
-  y: number;
-  isActive: boolean;
-  now: number;
-  /** Opened by a tap rather than a hover, so it says how to get to the chat. */
-  pinned?: boolean;
-}) {
-  const energy = energyLabel(stats);
-  // Members near a wall would otherwise have half the card outside the room.
-  const left = Math.min(Math.max(x, 104), SCENE_W - 104);
-
-  return (
-    <div
-      className="pointer-events-none absolute z-[60] w-[200px] -translate-x-1/2 rounded-lg border border-line bg-surface-raised/95 p-2.5 shadow-xl backdrop-blur-sm"
-      style={{ left, top: y - 132 }}
-      role="tooltip"
-    >
-      <div className="flex items-center gap-1.5">
-        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: stats.color }} />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-ink">{stats.name}</span>
-        {/* The leaf, not the whole id. OpenCode models are fully qualified
-            paths — `fireworks-ai/accounts/fireworks/models/glm-5p2` — and the
-            full string is wider than the card it sits in. */}
-        <span
-          className="shrink-0 text-[9px] uppercase tracking-wider text-ink-faint"
-          title={stats.model || undefined}
-        >
-          {shortModelLabel(stats.model) || 'team'}
-        </span>
-      </div>
-
-      <p className="mt-1.5 line-clamp-2 text-[10px] leading-snug text-ink-soft">
-        {isActive && stats.currentTask ? stats.currentTask : stats.currentTask ? `Last: ${stats.currentTask}` : '—'}
-      </p>
-
-      <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1.5 border-t border-line pt-2">
-        <div>
-          <dt className="text-[8px] uppercase tracking-wider text-ink-faint">Uptime</dt>
-          <dd className="font-mono text-[10px] text-ink">{uptimeLabel(stats.startedAt, now, isActive)}</dd>
-        </div>
-        <div>
-          <dt className="text-[8px] uppercase tracking-wider text-ink-faint">Tokens</dt>
-          <dd className="font-mono text-[10px] text-ink">{compactTokens(stats.billable)}</dd>
-        </div>
-        <div>
-          <dt className="text-[8px] uppercase tracking-wider text-ink-faint">Cost</dt>
-          <dd className="font-mono text-[10px] text-ink">${stats.usage.totalCostUsd.toFixed(3)}</dd>
-        </div>
-        <div>
-          <dt className="text-[8px] uppercase tracking-wider text-ink-faint">Energy</dt>
-          <dd className="font-mono text-[10px] text-ink">{energy.text}</dd>
-          {energy.pct !== null && (
-            <dd className="mt-0.5 h-0.5 overflow-hidden rounded-full bg-surface-overlay">
-              <span
-                className={`block h-full ${energy.pct > 25 ? 'bg-signal-ok' : 'bg-signal-warn'}`}
-                style={{ width: `${energy.pct}%` }}
-              />
-            </dd>
-          )}
-        </div>
-      </dl>
-
-      {pinned && (
-        <p className="mt-2 text-center text-[9px] uppercase tracking-wider text-ink-faint">Tap again to open the chat</p>
-      )}
-    </div>
-  );
 }
 
 export function LunarOfficeScene({
