@@ -97,6 +97,32 @@ The preferred path is `--json-schema` plus a `StructuredOutput` tool result.
 There is a text-parsing fallback, and it is worth knowing that **the fallback
 fails open**: output that cannot be parsed at all is treated as approval.
 
+### Tickets and the whiteboard
+
+On top of the phases the run keeps a ticket board and a whiteboard in the
+state file (`tickets`, `board`), the way a team works a Jira board. The rules
+are in `src/lib/tickets.ts` (statuses, allowed moves, history) and
+`src/lib/workflow.ts` (what happens when); the orchestrator only calls them.
+
+- The user's whiteboard brief (`POST /api/board`) leads the planner's first prompt.
+- `plan.md` is mirrored onto the board once a second while it changes, and the
+  planner is asked to write an outline first, so the plan appears as it is
+  written. The plan is a story in Solutioning until review approves it.
+- After approval the planner breaks the plan into at most 8 tickets
+  (`BREAKDOWN_SCHEMA`) and calls each owner over to assign them.
+- The coder works ticket by ticket. Code-review issues and QA failures become
+  bug tickets; a story that fails QA is rejected back to In Progress. Before
+  testing, the tester asks the coder up to three questions and the coder
+  answers from its own session — two real turns.
+- Audit findings are mirrored as security tickets that follow the finding.
+
+Each step emits an event (`ticket_created`, `ticket_moved`, `call_member`,
+`qa_question`, …) whose `detail` names the ticket and member involved, which is
+what the 3D studio stages. Board actions from the UI go through a file queue
+under `.claude/ticket-ops/` that the orchestrator drains, never a direct write
+to a state file it rewrites whole. `scripts/test-orchestrator-workflow.mjs`
+drives the real orchestrator through all of it against a stub CLI.
+
 ## Spawning
 
 Each member runs as its own Claude Code session:

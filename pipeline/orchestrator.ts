@@ -16,7 +16,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, copyFileSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -90,6 +90,18 @@ import {
 import { SLOT_LABELS, type SlotId, type TeamMember } from '../src/lib/team/types.ts';
 import { buildsDir, makeExecutable, openPath } from '../src/lib/platform.ts';
 import { RUN_TOKEN_ENV, startHeartbeat } from '../src/lib/orchestrator-liveness.ts';
+import {
+  activeTicketFor,
+  encodeWorkflowDetail,
+  isClosed,
+  normalizeBoard,
+  normalizeTickets,
+  type BoardState,
+  type Ticket,
+  type TicketStatus,
+} from '../src/lib/tickets.ts';
+import { applyTicketOps, drainTicketOps } from '../src/lib/workflow-store.ts';
+import * as wf from '../src/lib/workflow.ts';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -531,6 +543,8 @@ interface AuditFinding {
   status: AuditFindingStatus;
   createdAt: string;
   history: AuditFindingHistoryEntry[];
+  /** The security ticket that mirrors this finding on the board. */
+  ticketId?: string;
 }
 
 interface PipelineState {
@@ -564,6 +578,8 @@ interface PipelineState {
   auditFindings?: AuditFinding[];
   auditDeployPending?: boolean;
   auditActionInFlight?: boolean;
+  tickets: Ticket[];
+  board: BoardState;
 }
 
 const eventsFile = join(projectDir, 'pipeline-events.json');
@@ -606,6 +622,8 @@ if (resumingExistingProject && existsSync(eventsFile)) {
     auditFindings: Array.isArray(existing.auditFindings) ? existing.auditFindings : [],
     auditDeployPending: existing.auditDeployPending === true,
     auditActionInFlight: existing.auditActionInFlight === true,
+    tickets: normalizeTickets(existing.tickets),
+    board: normalizeBoard(existing.board),
   };
 } else {
   // Fresh start — but preserve any existing events (concept-phase conversation)
@@ -616,6 +634,10 @@ if (resumingExistingProject && existsSync(eventsFile)) {
   let existingStopAfterPhase = 'none';
   let existingRunFinalAudit = false;
   let existingIsolationPolicy: 'ask' | 'required' = 'ask';
+  // The whiteboard brief arrives with the staged state; tickets from a
+  // previous run in the same folder are kept so the board has a history.
+  let existingTickets: Ticket[] = [];
+  let existingBoard: BoardState = {};
   if (existsSync(eventsFile)) {
     try {
       const existing = JSON.parse(readFileSync(eventsFile, 'utf8'));
@@ -627,6 +649,8 @@ if (resumingExistingProject && existsSync(eventsFile)) {
       existingRunFinalAudit = existing.runFinalAudit === true;
       if (existing.isolationPolicy === 'required') existingIsolationPolicy = 'required';
       if (existing.securityMode === 'strict') securityMode = 'strict';
+      existingTickets = normalizeTickets(existing.tickets);
+      existingBoard = normalizeBoard(existing.board);
     } catch {}
   }
   state = {
@@ -651,6 +675,8 @@ if (resumingExistingProject && existsSync(eventsFile)) {
     auditFindings: [],
     auditDeployPending: false,
     auditActionInFlight: false,
+    tickets: existingTickets,
+    board: existingBoard,
   };
 }
 
@@ -688,7 +714,26 @@ function rotateEventsIfNeeded() {
   }
 }
 
+/**
+ * Comments, rejects and reopens from the board UI arrive as files in an op
+ * queue rather than as writes to the state file, which this process rewrites
+ * whole and would otherwise clobber. Read at most twice a second.
+ */
+const TICKET_OP_DRAIN_MS = 500;
+let lastTicketDrain = 0;
+
+function drainUserTicketOps(): boolean {
+  const now = Date.now();
+  if (now - lastTicketDrain < TICKET_OP_DRAIN_MS) return false;
+  lastTicketDrain = now;
+  const ops = drainTicketOps(projectDir);
+  if (ops.length === 0) return false;
+  state.tickets = applyTicketOps(state.tickets, ops);
+  return true;
+}
+
 function flush() {
+  drainUserTicketOps();
   rotateEventsIfNeeded();
   writeJsonAtomic(eventsFile, state);
 }
@@ -725,6 +770,161 @@ function setAgent(agent: string, status: string) {
   flush();
 }
 
+// ── Team workflow: whiteboard, tickets, hand-offs ────────────────────
+//
+// The rules live in src/lib/workflow.ts; this is the glue to this run's state.
+
+const workflow: wf.WorkflowHost = {
+  get tickets() {
+    return state.tickets;
+  },
+  set tickets(next: Ticket[]) {
+    state.tickets = next;
+  },
+  get board() {
+    return state.board;
+  },
+  set board(next: BoardState) {
+    state.board = next;
+  },
+  emit: (agent, phase, type, text, detail) => emit(agent, phase, type, text, detail),
+  phase: () => state.currentPhase,
+};
+
+/**
+ * Pause between hand-offs so the studio can show them happen — a member
+ * walking over, being told what is theirs, and walking back. Zero in tests.
+ */
+const SCENE_GAP_MS = Math.max(0, Number(process.env.HACKEROOM_SCENE_GAP_MS ?? 2000) || 0);
+
+function sleep(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolveSleep) => setTimeout(resolveSleep, ms)) : Promise.resolve();
+}
+
+const planPath = join(projectDir, 'plan.md');
+const PLAN_TICKET_PREFIX = 'Plan: ';
+const PLAN_MIRROR_MS = 1000;
+
+function planTicket(): Ticket | undefined {
+  return state.tickets.find(
+    (t) => t.type === 'story' && t.assignee === id('planner') && t.title.startsWith(PLAN_TICKET_PREFIX),
+  );
+}
+
+/** The story that tracks the plan itself; it sits in Solutioning until approved. */
+function ensurePlanTicket(): Ticket {
+  // Once per run, open or closed: breakdown runs after the plan story is Done
+  // and must find it rather than open a second one.
+  const existing = planTicket();
+  if (existing) return existing;
+  const brief = state.board.brief?.text?.trim();
+  return wf.openTicket(workflow, {
+    type: 'story',
+    title: `${PLAN_TICKET_PREFIX}${concept}`,
+    description: brief || concept,
+    reporter: 'user',
+    assignee: id('planner'),
+    status: 'solutioning',
+    priority: 'p1',
+  });
+}
+
+function countSections(text: string): number {
+  return (text.match(/^#{1,3}\s/gm) || []).length;
+}
+
+/** Copy plan.md onto the whiteboard; true when the board changed. */
+function mirrorPlanToBoard(status: 'drafting' | 'final'): boolean {
+  let text: string;
+  try {
+    text = readFileSync(planPath, 'utf8');
+  } catch {
+    return false;
+  }
+  if (!wf.setBoardPlan(workflow, text, id('planner'), status)) return false;
+  const sections = countSections(text);
+  emit(
+    id('planner'),
+    state.currentPhase,
+    'board_write',
+    status === 'final'
+      ? 'Final plan is up on the whiteboard'
+      : `Writing the plan on the whiteboard${sections ? ` (${sections} section${sections === 1 ? '' : 's'})` : ''}`,
+    encodeWorkflowDetail({ target: 'whiteboard' }),
+  );
+  return true;
+}
+
+/**
+ * Keep the whiteboard in step with plan.md while the planner works, so the
+ * plan appears as it is written rather than all at once at the end. An mtime
+ * check a second is all it costs.
+ */
+async function withPlanMirror<T>(work: () => Promise<T>): Promise<T> {
+  const mtimeNow = () => {
+    try {
+      return statSync(planPath).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  // Only edits made during this phase count: the board already shows the
+  // plan as it was when the phase began, possibly as final.
+  let lastMtime = mtimeNow();
+  const tick = () => {
+    try {
+      const mtime = statSync(planPath).mtimeMs;
+      if (mtime === lastMtime) return;
+      lastMtime = mtime;
+      mirrorPlanToBoard('drafting');
+    } catch {}
+  };
+  const timer = setInterval(tick, PLAN_MIRROR_MS);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+    tick();
+  }
+}
+
+function finalizePlan(note: string) {
+  mirrorPlanToBoard('final');
+  const plan = planTicket();
+  if (plan) wf.move(workflow, plan.id, 'done', id('planner'), note);
+}
+
+function isWorkItem(t: Ticket): boolean {
+  return t.type === 'story' || t.type === 'task';
+}
+
+function openTicketsFor(memberId: string, filter: (t: Ticket) => boolean): Ticket[] {
+  return state.tickets.filter((t) => t.assignee === memberId && !isClosed(t.status) && filter(t));
+}
+
+function moveAll(tickets: readonly Ticket[], from: readonly TicketStatus[], to: TicketStatus, by: string, note?: string) {
+  for (const ticket of tickets) {
+    const current = state.tickets.find((t) => t.id === ticket.id);
+    if (current && from.includes(current.status)) wf.move(workflow, ticket.id, to, by, note);
+  }
+}
+
+/** The one story a finding can be pinned to, when there is exactly one. */
+function soleStoryId(): string | undefined {
+  const stories = openTicketsFor(id('coder'), isWorkItem);
+  return stories.length === 1 ? stories[0].id : undefined;
+}
+
+function blockOpenWork(note: string) {
+  const open = openTicketsFor(id('coder'), (t) => isWorkItem(t) || t.type === 'bug');
+  moveAll(open, ['todo', 'in-progress', 'in-review', 'in-qa', 'backlog'], 'blocked', 'system', note);
+}
+
+function syncFindingTicket(finding: AuditFinding) {
+  if (!finding.ticketId) return;
+  wf.move(workflow, finding.ticketId, wf.securityStatusFor(finding.status), id('auditor'), finding.status.replace(/-/g, ' '));
+}
+
 function setPhase(phase: string) {
   state.currentPhase = phase;
   flush();
@@ -759,7 +959,7 @@ function startActiveTurn(agent: string, prompt: string, autoResumeCount: number,
     lastEventAt: now,
     sessionId: resume || state.sessions[agent] || '',
     promptSummary: summarizePrompt(prompt),
-    currentTask: describeCurrentTask(slotOf(agent) ?? '', state.currentPhase),
+    currentTask: describeCurrentTask(slotOf(agent) ?? '', state.currentPhase, activeTicketFor(state.tickets, agent)),
     autoResumeCount,
   };
 
@@ -1611,11 +1811,19 @@ function buildPhase0Context() {
   return `${preamble}\n\n${lines.join('\n')}\n\n`;
 }
 
-async function runPlanningPhase(aSession: string, options?: { resumeStalled?: boolean }): Promise<string> {
+function runPlanningPhase(aSession: string, options?: { resumeStalled?: boolean }): Promise<string> {
+  return withPlanMirror(() => runPlanningSteps(aSession, options));
+}
+
+async function runPlanningSteps(aSession: string, options?: { resumeStalled?: boolean }): Promise<string> {
   setPhase('planning');
   setPipelineStatus('running');
   setAgent(id('planner'), 'active');
-  const phase0Context = buildPhase0Context();
+  ensurePlanTicket();
+  if (state.board.brief?.text) {
+    emit(id('planner'), 'planning', 'board_write', 'Reading the brief on the whiteboard', encodeWorkflowDetail({ target: 'whiteboard' }));
+  }
+  const phase0Context = wf.briefForPlanner(state.board) + buildPhase0Context();
   const existingPlanPath = join(projectDir, 'plan.md');
   let step = detectPlanningStep(state.events, { planExists: existsSync(existingPlanPath), plannerId: id('planner') });
   const resumeSession = aSession || state.runtime.activeTurn?.sessionId || sessionFor('planner');
@@ -1700,14 +1908,18 @@ async function runPlanningPhase(aSession: string, options?: { resumeStalled?: bo
   return aSession;
 }
 
-async function runPlanReviewPhase(
-  aSession: string,
-  options?: {
-    resumeStalledSlot?: SlotId;
-    bSession?: string;
-    emitInitialSend?: boolean;
-  }
-): Promise<{ aSession: string; bSession?: string; reviewRound: number; paused: boolean }> {
+type PlanReviewOptions = {
+  resumeStalledSlot?: SlotId;
+  bSession?: string;
+  emitInitialSend?: boolean;
+};
+type PlanReviewOutcome = { aSession: string; bSession?: string; reviewRound: number; paused: boolean };
+
+function runPlanReviewPhase(aSession: string, options?: PlanReviewOptions): Promise<PlanReviewOutcome> {
+  return withPlanMirror(() => runPlanReviewRounds(aSession, options));
+}
+
+async function runPlanReviewRounds(aSession: string, options?: PlanReviewOptions): Promise<PlanReviewOutcome> {
   // With no reviewer on the team there is no external approval gate to wait
   // on. The planner's own self-review pass has already run, so the plan is
   // locked here and the run moves straight to coding.
@@ -1720,6 +1932,7 @@ async function runPlanReviewPhase(
       'There is no reviewer assigned, so nobody is poking holes in this plan before we build. I locked it as-is and we are moving to coding.'
     );
     emit(id('planner'), 'plan-review', 'approval', 'PLAN LOCKED');
+    finalizePlan('Locked without external review');
     return { aSession, bSession: undefined, reviewRound: 0, paused: shouldStopAfterPlanReview() };
   }
 
@@ -1808,8 +2021,10 @@ async function runPlanReviewPhase(
     }
 
     const questions = (signal.questions as string[]) || [];
+    const planStory = planTicket();
     questions.forEach((question, index) => {
       emit(id('reviewer'), 'plan-review', 'question', `Q${index + 1}: ${question}`);
+      if (planStory) wf.comment(workflow, planStory.id, id('reviewer'), question);
     });
 
     emit(id('reviewer'), 'plan-review', 'send', `Sent ${questions.length} question(s) to A`);
@@ -1861,6 +2076,7 @@ async function runPlanReviewPhase(
   }
 
   emit(id('planner'), 'plan-review', 'status', 'Plan locked — final, unmodifiable copy');
+  finalizePlan('Approved in review');
 
   if (shouldStopAfterPlanReview()) {
     state.activeAgent = '';
@@ -1957,6 +2173,18 @@ async function runSecurityAudit(): Promise<{ paused: boolean }> {
     }
   }
 
+  for (const finding of findings) {
+    const ticket = wf.openTicket(workflow, {
+      type: 'security',
+      title: wf.bugTitle(finding.text),
+      description: `${finding.severity.toUpperCase()} — found in the security audit:\n\n${finding.text}`,
+      reporter: id('auditor'),
+      assignee: id('coder'),
+      priority: wf.securityPriority(finding.severity),
+      status: 'todo',
+    });
+    finding.ticketId = ticket.id;
+  }
   state.auditFindings = findings;
   state.auditDeployPending = true;
   setPipelineStatus('awaiting-audit-decision');
@@ -2046,6 +2274,8 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   const nowIso = () => new Date().toISOString();
 
   finding.status = 'sent-to-c';
+
+  syncFindingTicket(finding);
   finding.history.push({ time: nowIso(), action: 'sent-to-c' });
   setPhase('security-audit');
   setAgent(id('coder'), 'active');
@@ -2093,6 +2323,7 @@ async function runAuditFixPass(findingId: string): Promise<void> {
     const failures = Array.isArray(dSignal.failures) ? (dSignal.failures as string[]) : [];
     const failureNote = failures.length ? failures.join(' | ') : 'Tests failed without structured failure details.';
     finding.status = 'open';
+    syncFindingTicket(finding);
     finding.history.push({ time: nowIso(), action: 'fix-failed-tests', note: failureNote });
     emit(id('tester'), 'security-audit', 'failure', `Fix for ${finding.id} broke tests: ${failureNote}`);
     emitSupervisor('security-audit', `C's fix for ${finding.id} broke tests. The finding is back to Open — decide whether to retry, dismiss, or ignore.`);
@@ -2101,6 +2332,8 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   }
 
   finding.status = 're-auditing';
+
+  syncFindingTicket(finding);
   setAgent(id('auditor'), 'active');
   emit(id('tester'), 'security-audit', 'send', `Fix for ${finding.id} passed tests. Sending to E for re-audit.`);
   flush();
@@ -2125,6 +2358,7 @@ async function runAuditFixPass(findingId: string): Promise<void> {
 
   if (isPositiveSignal(eSignal)) {
     finding.status = 'resolved';
+    syncFindingTicket(finding);
     finding.history.push({ time: nowIso(), action: 're-audit-passed' });
     emit(id('auditor'), 'security-audit', 'approval', `Finding ${finding.id} resolved ✓`);
     emitSupervisor('security-audit', `Finding ${finding.id} is resolved. Back to your review.`);
@@ -2140,6 +2374,7 @@ async function runAuditFixPass(findingId: string): Promise<void> {
       }
     }
     finding.status = 'still-open';
+    syncFindingTicket(finding);
     finding.text = newText;
     finding.history.push({ time: nowIso(), action: 're-audit-failed', note: newText });
     emit(id('auditor'), 'security-audit', 'issue', `Finding ${finding.id} still open: ${newText}`);
@@ -2155,6 +2390,7 @@ function dismissAuditFinding(findingId: string): void {
     return;
   }
   finding.status = 'dismissed';
+  syncFindingTicket(finding);
   finding.history.push({ time: new Date().toISOString(), action: 'dismissed' });
   emit('system', 'security-audit', 'dismissal', `User dismissed finding ${finding.id} (${finding.severity}): ${finding.text}`);
   emitSupervisor('security-audit', `Finding ${finding.id} dismissed.`);
@@ -2206,26 +2442,170 @@ async function handleAuditAction(): Promise<void> {
   }
 }
 
+/**
+ * QA walks over to the coder before the test pass and asks what it needs to
+ * know; the coder answers from its own session. Real turns, not scripted
+ * lines — and a failure here costs the briefing, never the run.
+ */
+async function runQaHuddle(
+  dSession: string | undefined,
+  cSession: string | undefined,
+): Promise<{ briefing: string; dSession: string | undefined; cSession: string | undefined }> {
+  const testerId = id('tester');
+  const coderId = id('coder');
+  const testerName = slotLabel('tester');
+  const coderName = slotLabel('coder');
+  const inScope = openTicketsFor(coderId, isWorkItem);
+
+  try {
+    setAgent(testerId, 'active');
+    emit(testerId, 'testing', 'call_member', `${testerName} heads over to ${coderName}'s desk before testing`, encodeWorkflowDetail({ target: coderId }));
+    const asked = await claude('tester', wf.buildQaQuestionsPrompt(planPath, inScope), {
+      resume: dSession,
+      jsonSchema: wf.QA_QUESTIONS_SCHEMA,
+    });
+    dSession = asked.sessionId || dSession;
+    if (dSession) saveSession(testerId, dSession);
+
+    const questions = wf.parseQuestions(asked.structured || parseSignal(asked.result));
+    if (questions.length === 0) {
+      emit(testerId, 'testing', 'text', 'Nothing to ask — I have what I need from the plan. Starting the test pass.');
+      return { briefing: '', dSession, cSession };
+    }
+    for (const question of questions) {
+      emit(testerId, 'testing', 'qa_question', question, encodeWorkflowDetail({ target: coderId }));
+    }
+
+    setAgent(coderId, 'active');
+    const answered = await claude('coder', wf.buildQaAnswersPrompt(questions, testerName), {
+      resume: cSession,
+      jsonSchema: wf.QA_ANSWERS_SCHEMA,
+    });
+    cSession = answered.sessionId || cSession;
+    if (cSession) saveSession(coderId, cSession);
+
+    const answers = wf.parseAnswers(answered.structured || parseSignal(answered.result), questions);
+    for (const qa of answers) {
+      emit(coderId, 'testing', 'qa_answer', qa.answer, encodeWorkflowDetail({ target: testerId }));
+    }
+    setAgent(coderId, 'idle');
+    setAgent(testerId, 'active');
+    return { briefing: wf.qaBriefing(answers), dSession, cSession };
+  } catch (err) {
+    emit('system', 'testing', 'status', `QA huddle skipped: ${(err as Error).message}`);
+    setAgent(testerId, 'active');
+    return { briefing: '', dSession, cSession };
+  }
+}
+
+/**
+ * After the plan is approved the planner splits it into tickets and hands
+ * each to whoever owns it — calling them over, one member at a time. Safe to
+ * run again on resume: a plan that already has tickets is not split twice.
+ */
+async function runBreakdown(aSession: string): Promise<string> {
+  const plannerId = id('planner');
+  const plan = ensurePlanTicket();
+  if (plan.status !== 'done') wf.move(workflow, plan.id, 'done', plannerId, 'Plan approved');
+  if (state.tickets.some((t) => t.parentId === plan.id && isWorkItem(t))) return aSession;
+
+  setAgent(plannerId, 'active');
+  emit(plannerId, 'coding', 'status', 'Breaking the plan into tickets...');
+  emitSupervisor('coding', 'The plan is approved. The planner is splitting it into tickets and will hand each one to whoever owns it.');
+
+  let items: wf.BreakdownItem[] = [];
+  try {
+    const breakdown = await claude('planner', wf.buildBreakdownPrompt(planPath), {
+      resume: aSession || sessionFor('planner'),
+      jsonSchema: wf.BREAKDOWN_SCHEMA,
+    });
+    if (breakdown.sessionId) {
+      aSession = breakdown.sessionId;
+      saveSession(plannerId, aSession);
+    }
+    items = wf.parseBreakdown(breakdown.structured || parseSignal(breakdown.result));
+  } catch (err) {
+    emit('system', 'coding', 'status', `Ticket breakdown failed (${(err as Error).message}) — tracking the plan as one ticket`);
+  }
+  if (items.length === 0) items = wf.fallbackBreakdown(concept);
+
+  const created = items.map((item) =>
+    wf.openTicket(workflow, {
+      type: item.type,
+      title: item.title,
+      description: item.description,
+      acceptance: item.acceptance,
+      priority: item.priority,
+      reporter: plannerId,
+      parentId: plan.id,
+      status: 'backlog',
+    }),
+  );
+  emit(plannerId, 'coding', 'status', `Created ${created.length} ticket(s) from the plan`);
+
+  // Group by owner so each member is called over once and told everything
+  // that is theirs, the way a lead runs a hand-off.
+  const owners = new Map<string, { member: TeamMember; tickets: Ticket[] }>();
+  created.forEach((ticket, index) => {
+    const slot: SlotId = items[index].assignee === 'tester' && memberFor('tester') ? 'tester' : 'coder';
+    const member = requireMember(slot);
+    const entry = owners.get(member.id) ?? { member, tickets: [] };
+    entry.tickets.push(ticket);
+    owners.set(member.id, entry);
+  });
+
+  const plannerName = slotLabel('planner');
+  for (const { member, tickets } of owners.values()) {
+    emit(plannerId, 'coding', 'call_member', `${plannerName} calls ${member.name} over`, encodeWorkflowDetail({ ticketId: tickets[0].id, target: member.id }));
+    await sleep(SCENE_GAP_MS);
+    for (const ticket of tickets) {
+      wf.assign(workflow, ticket.id, member.id, plannerId, member.name);
+      wf.move(workflow, ticket.id, 'todo', plannerId, `Assigned to ${member.name}`);
+      emit(plannerId, 'coding', 'text', `${ticket.id} is yours, ${member.name}: ${ticket.title}`, encodeWorkflowDetail({ ticketId: ticket.id, target: member.id }));
+      await sleep(SCENE_GAP_MS / 2);
+    }
+    emit(member.id, 'coding', 'text', `On it — ${tickets.map((t) => t.id).join(', ')}.`, encodeWorkflowDetail({ target: plannerId }));
+    await sleep(SCENE_GAP_MS / 2);
+  }
+
+  setAgent(plannerId, 'idle');
+  return aSession;
+}
+
 async function runBuildFromCoding(aSession: string): Promise<{ aSession: string; codeReviewRound: number; testRound: number }> {
   setPhase('coding');
   setPipelineStatus('running');
-  setAgent(id('coder'), 'active');
-  emit(id('planner'), 'coding', 'send', 'Sent approved plan to C');
-  emit(id('coder'), 'coding', 'receive', 'Received approved plan from A');
-  emit(id('coder'), 'coding', 'status', 'Building...');
-  emitSupervisor('coding', 'The coder is implementing the approved plan now. At this point the goal is execution, not re-deciding the design.');
+  aSession = await runBreakdown(aSession);
 
-  const cResult = await claude('coder', [
-    `Read the approved plan at ${join(projectDir, 'plan.md')}`,
-    'Build exactly what it says. Every file, every modification, every special case.',
-    'Do not improvise. Do not interpret. Do not "improve."',
-    'Do not modify plan.md — it is locked.',
-    'Do NOT use the Agent tool. Do NOT spawn sub-agents. Build everything yourself.',
-    '',
-    'When you are done, confirm what you built.',
-  ].join('\n'), {});
-  let cSession = cResult.sessionId;
-  saveSession(id('coder'), cSession);
+  const coderId = id('coder');
+  const coderName = slotLabel('coder');
+  setAgent(coderId, 'active');
+  emit(id('planner'), 'coding', 'send', `Sent approved plan to ${coderName}`);
+  emit(coderId, 'coding', 'receive', `Received approved plan from ${slotLabel('planner')}`);
+  emitSupervisor('coding', 'The coder is working through the tickets now, one at a time. At this point the goal is execution, not re-deciding the design.');
+
+  const queue = openTicketsFor(coderId, (t) => isWorkItem(t) && (t.status === 'todo' || t.status === 'in-progress'));
+  const builtStatus: TicketStatus = runPlan.phases.codeReview ? 'in-review' : runPlan.phases.testing ? 'in-qa' : 'done';
+  // A resume that finds every ticket already built keeps the coder's session,
+  // so the fix rounds that follow still have the context of the build.
+  let cSession: string | undefined = queue.length === 0 ? sessionFor('coder') : undefined;
+  let firstTicket = true;
+
+  for (const [index, ticket] of queue.entries()) {
+    wf.move(workflow, ticket.id, 'in-progress', coderId, 'Started');
+    setAgent(coderId, 'active');
+    emit(coderId, 'coding', 'status', `Working on ${ticket.id}: ${ticket.title}`);
+
+    const cResult = await claude('coder', wf.buildTicketPrompt(ticket, planPath, firstTicket, queue.length - index - 1), {
+      resume: cSession,
+    });
+    cSession = cResult.sessionId || cSession;
+    if (cSession) saveSession(coderId, cSession);
+    firstTicket = false;
+
+    wf.move(workflow, ticket.id, builtStatus, coderId, 'Built');
+    emit(coderId, 'coding', 'status', `Finished ${ticket.id}`);
+  }
 
   emit(id('coder'), 'coding', 'status', 'Finished coding');
 
@@ -2287,6 +2667,9 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
     if (isPositiveSignal(signal)) {
       codeApproved = true;
       emit(id('tester'), 'code-review', 'approval', 'CODE APPROVED');
+      const reviewed = openTicketsFor(coderId, (t) => t.status === 'in-review');
+      moveAll(reviewed.filter((t) => t.type === 'bug'), ['in-review'], 'done', id('tester'), 'Fixed in review');
+      moveAll(reviewed.filter(isWorkItem), ['in-review'], runPlan.phases.testing ? 'in-qa' : 'done', id('tester'), 'Code review passed');
     } else {
       const issues = (signal.issues as string[]) || [];
 
@@ -2294,7 +2677,14 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
         emit(id('tester'), 'code-review', 'issue', `Issue ${index + 1}: ${issue}`);
       });
 
-      emit(id('tester'), 'code-review', 'send', `Sent ${issues.length} issue(s) to C`);
+      const reviewBugs = wf.fileBugs(workflow, issues, {
+        reporter: id('tester'),
+        assignee: coderId,
+        assigneeName: coderName,
+        parentId: soleStoryId(),
+        source: 'code review',
+      });
+      emit(id('tester'), 'code-review', 'send', `Sent ${issues.length} issue(s) to ${coderName}`);
 
       // Same reasoning as plan review: a loop that has not converged in five
       // rounds is not converging, and there is real code on disk that someone
@@ -2303,6 +2693,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
         state.activeAgent = '';
         setPipelineStatus('paused');
         emit('system', 'code-review', 'failure', `Code review did not converge after ${codeReviewRound} rounds`);
+        blockOpenWork(`Code review did not converge after ${codeReviewRound} rounds`);
         emitSupervisor(
           'code-review',
           `${slotLabel('tester')} and ${slotLabel('coder')} have been round the code ${codeReviewRound} times without agreeing, so I paused. Still open: ${issues.join(' | ') || 'not stated'}. The code is on disk if you want to look before deciding.`
@@ -2314,16 +2705,18 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       setAgent(id('coder'), 'active');
       emit(id('coder'), 'code-review', 'receive', `Received ${issues.length} issue(s) from D`);
 
+      moveAll(reviewBugs, ['todo'], 'in-progress', coderId, 'Fixing');
       const cReviewFollowup = await claude('coder', [
         'The tester found issues with your code:',
         '',
-        ...issues.map((issue, index) => `${index + 1}. ${issue}`),
+        ...issues.map((issue, index) => `${index + 1}. ${reviewBugs[index] ? `${reviewBugs[index].id}: ` : ''}${issue}`),
         '',
         'Fix each issue. Do not modify plan.md.',
       ].join('\n'), { resume: cSession });
       cSession = cReviewFollowup.sessionId;
       saveSession(id('coder'), cSession);
 
+      moveAll(reviewBugs, ['in-progress'], 'in-review', coderId, 'Fix ready for review');
       emit(id('coder'), 'code-review', 'fix', 'Applied fixes');
       emit(id('coder'), 'code-review', 'send', 'Sent fixed code to D');
       setAgent(id('coder'), 'idle');
@@ -2338,12 +2731,23 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
 
   let testsPassed = !runPlan.phases.testing;
   let testRound = 0;
+  let qaBriefing = '';
+
+  if (runPlan.phases.testing) {
+    const huddle = await runQaHuddle(dSession, cSession);
+    qaBriefing = huddle.briefing;
+    dSession = huddle.dSession;
+    cSession = huddle.cSession;
+    moveAll(openTicketsFor(coderId, isWorkItem), ['in-review', 'in-progress'], 'in-qa', id('tester'), 'Ready for QA');
+    moveAll(openTicketsFor(id('tester'), isWorkItem), ['todo'], 'in-progress', id('tester'), 'Started');
+  }
 
   while (!testsPassed) {
     testRound += 1;
 
     const testPrompt = testRound === 1
       ? [
+          qaBriefing,
           'Code review is complete. Now test the code.',
           'Run it. Confirm it actually works — not just that it looks right.',
           `Test all functionality against the plan at ${join(projectDir, 'plan.md')}`,
@@ -2374,6 +2778,8 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
     if (isPositiveSignal(signal)) {
       testsPassed = true;
       emit(id('tester'), 'testing', 'approval', 'ALL TESTS PASSED');
+      const verified = state.tickets.filter((t) => !isClosed(t.status) && (isWorkItem(t) || t.type === 'bug') && t.status !== 'todo' && t.status !== 'backlog');
+      moveAll(verified, ['in-qa', 'in-review', 'in-progress'], 'done', id('tester'), 'Passed QA');
       setAgent(id('tester'), 'done');
     } else {
       const failures = (signal.failures as string[]) || [];
@@ -2382,7 +2788,17 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
         emit(id('tester'), 'testing', 'failure', `Failure ${index + 1}: ${failure}`);
       });
 
-      emit(id('tester'), 'testing', 'send', `Sent ${failures.length} failure(s) to C`);
+      const qaBugs = wf.fileBugs(workflow, failures, {
+        reporter: id('tester'),
+        assignee: coderId,
+        assigneeName: coderName,
+        parentId: soleStoryId(),
+        source: 'QA',
+      });
+      const failedStories = openTicketsFor(coderId, (t) => isWorkItem(t) && t.status === 'in-qa');
+      moveAll(failedStories, ['in-qa'], 'rejected', id('tester'), `Failed QA round ${testRound}: ${failures.length} bug(s)`);
+      moveAll(failedStories, ['rejected'], 'in-progress', coderId, 'Reopened to fix the QA bugs');
+      emit(id('tester'), 'testing', 'send', `Sent ${failures.length} failure(s) to ${coderName}`);
 
       // Tests that still fail after five fix rounds are telling you something
       // the coder cannot fix by trying harder — a bad assumption in the plan,
@@ -2391,6 +2807,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
         state.activeAgent = '';
         setPipelineStatus('paused');
         emit('system', 'testing', 'failure', `Tests did not pass after ${testRound} rounds`);
+        blockOpenWork(`Still failing after ${testRound} test rounds`);
         emitSupervisor(
           'testing',
           `${slotLabel('coder')} has had ${testRound} attempts at these failures and they are still failing, so I paused instead of going round again. Still failing: ${failures.join(' | ') || 'not stated'}. This usually means the plan assumed something that is not true.`
@@ -2402,16 +2819,19 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       setAgent(id('coder'), 'active');
       emit(id('coder'), 'testing', 'receive', `Received ${failures.length} failure(s) from D`);
 
+      moveAll(qaBugs, ['todo'], 'in-progress', coderId, 'Fixing');
       const cTestFollowup = await claude('coder', [
         'The tester found test failures:',
         '',
-        ...failures.map((failure, index) => `${index + 1}. ${failure}`),
+        ...failures.map((failure, index) => `${index + 1}. ${qaBugs[index] ? `${qaBugs[index].id}: ` : ''}${failure}`),
         '',
         'Fix each failure. Do not modify plan.md.',
       ].join('\n'), { resume: cSession });
       cSession = cTestFollowup.sessionId;
       saveSession(id('coder'), cSession);
 
+      moveAll(qaBugs, ['in-progress'], 'in-qa', coderId, 'Fix ready to retest');
+      moveAll(failedStories, ['in-progress'], 'in-qa', coderId, 'Ready to retest');
       emit(id('coder'), 'testing', 'fix', 'Applied fixes');
       emit(id('coder'), 'testing', 'send', 'Sent fixed code to D');
       setAgent(id('coder'), 'done');
@@ -2435,6 +2855,12 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
 // ════════════════════════════════════════════════════════════════════
 
 async function run() {
+  // Board actions made while a member is in a long, quiet turn still land
+  // within a couple of seconds instead of waiting for the next event.
+  setInterval(() => {
+    if (drainUserTicketOps()) flush();
+  }, 2000).unref();
+
   console.log('\n\x1b[1m╔══════════════════════════════════════════╗');
   console.log('║     PIPELINE BUILD ORCHESTRATOR (LIVE)     ║');
   console.log('╚══════════════════════════════════════════╝\x1b[0m');

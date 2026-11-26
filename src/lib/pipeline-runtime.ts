@@ -96,7 +96,11 @@ export function summarizePrompt(prompt: string, maxLength: number = 140): string
  * the pair already says what the work is, and deriving it keeps the phrase
  * consistent instead of depending on whichever prompt happened to be sent.
  */
-export function describeCurrentTask(slot: string, phase: string): string {
+export function describeCurrentTask(
+  slot: string,
+  phase: string,
+  ticket?: { id: string; title: string } | null,
+): string {
   const byPhase: Record<string, string> = {
     concept: 'Talking through the idea',
     planning: 'Researching and writing the build plan',
@@ -108,7 +112,11 @@ export function describeCurrentTask(slot: string, phase: string): string {
     deploy: 'Finishing up and handing back',
   };
 
-  return byPhase[phase] || `Working (${phase})`;
+  const base = byPhase[phase] || `Working (${phase})`;
+  if (!ticket) return base;
+  // The ticket says what, the phase says how; the board shows the rest.
+  const title = ticket.title.length > 60 ? `${ticket.title.slice(0, 59)}…` : ticket.title;
+  return `${ticket.id} ${title} — ${base}`;
 }
 
 /**

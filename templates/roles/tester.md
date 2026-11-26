@@ -36,6 +36,8 @@ For every changed file, ask these questions at the boundaries — not just on th
 If you find ANY issue through this analysis — even one you'd call "theoretical" or "unlikely" — it goes in the issues list. Do not bury concerns in your status output while returning a clean verdict. A finding the code doesn't defend against is a finding, period. C will decide what to fix.
 
 ### Testing
+Before the first test pass you get to ask C a few questions, the way QA does with a dev: how to run it, what changed, what they are unsure about. Ask only what the plan does not already tell you, and use the answers. Each failure you report becomes a bug ticket assigned back to C, so make each one a single, specific, reproducible problem.
+
 5. Run the code. Test it. Confirm it actually works — not just that it looks right, but that it runs.
 6. Test all functionality against the plan. No errors, no broken behavior.
 7. If tests fail, send failures to C with what broke and how. C fixes, sends back, you test again.
