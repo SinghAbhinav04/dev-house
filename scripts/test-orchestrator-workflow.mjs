@@ -22,80 +22,7 @@ for (const dir of [home, bin, stubState, projectDir]) mkdirSync(dir, { recursive
 
 // ── The stub CLI ─────────────────────────────────────────────────────
 
-const STUB = String.raw`
-const fs = require('fs');
-const path = require('path');
-const argv = process.argv.slice(2);
-const arg = (flag) => { const i = argv.indexOf(flag); return i === -1 ? '' : argv[i + 1]; };
-const prompt = arg('-p');
-const schemaText = arg('--json-schema');
-const schema = schemaText ? JSON.parse(schemaText) : null;
-const props = schema && schema.properties ? Object.keys(schema.properties) : [];
-const stateDir = process.env.STUB_STATE;
-const bump = (key) => {
-  const file = path.join(stateDir, key);
-  const n = (fs.existsSync(file) ? Number(fs.readFileSync(file, 'utf8')) : 0) + 1;
-  fs.writeFileSync(file, String(n));
-  return n;
-};
-fs.appendFileSync(path.join(stateDir, 'prompts.log'), JSON.stringify({ prompt, props }) + '\n');
-const wait = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
-let text = 'Done.';
-let structured;
-
-const statuses = (schema && schema.properties.status && schema.properties.status.enum) || [];
-if (statuses.includes('ready')) {
-  structured = { status: 'ready', tickets: [
-    { title: 'Board columns and cards', assignee: 'coder', type: 'story', priority: 'p1', acceptance: ['Columns render'] },
-    { title: 'Drag cards between columns', assignee: 'coder', type: 'story', acceptance: ['Drop moves the card'] },
-    { title: 'Write the test plan', assignee: 'tester', type: 'task' },
-  ] };
-} else if (statuses.includes('asked')) {
-  structured = { status: 'asked', questions: ['How do I start it?', 'Anything you are unsure about?'] };
-} else if (statuses.includes('answered')) {
-  structured = { status: 'answered', answers: [
-    { question: 'How do I start it?', answer: 'Open index.html — no build step.' },
-    { question: 'Anything you are unsure about?', answer: 'Dragging onto an empty column.' },
-  ] };
-} else if (statuses.includes('passed')) {
-  structured = bump('test') === 1
-    ? { status: 'failed', failures: ['Dropping a card on an empty column does nothing.'] }
-    : { status: 'passed' };
-} else if (statuses.includes('issues') && schema.properties.issues.items.type === 'object') {
-  structured = { status: 'issues', issues: [{ severity: 'high', finding: 'Card titles are rendered with innerHTML.' }] };
-} else if (statuses.includes('issues')) {
-  structured = bump('review') === 1
-    ? { status: 'issues', issues: ['The card count badge is never updated.'] }
-    : { status: 'approved' };
-} else if (statuses.includes('approved')) {
-  structured = { status: 'approved' };
-} else {
-  const write = /Write the full build plan to (.+?plan\.md) now/.exec(prompt);
-  if (write) {
-    fs.writeFileSync(write[1], '# Kanban board\n\n## Goal\n\n## Files\n');
-    wait(1500);
-    fs.writeFileSync(write[1], '# Kanban board\n\n## Goal\nA board.\n\n## Files\nindex.js\n\n## Tests\nManual.\n');
-    text = 'Draft written';
-  } else if (/research/i.test(prompt)) {
-    text = 'Research complete';
-  }
-}
-
-const session = 'stub-' + (arg('--resume') || Math.random().toString(36).slice(2, 10));
-const out = (event) => process.stdout.write(JSON.stringify(event) + '\n');
-out({ type: 'system', subtype: 'init', session_id: session });
-out({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-out({
-  type: 'result',
-  subtype: 'success',
-  result: structured ? JSON.stringify(structured) : text,
-  structured_output: structured,
-  session_id: session,
-  usage: { input_tokens: 10, output_tokens: 5 },
-});
-`;
-
+const STUB = readFileSync(join(repo, 'scripts', 'fixtures', 'stub-claude.cjs'), 'utf8');
 writeFileSync(join(bin, 'stub-claude.js'), STUB);
 if (process.platform === 'win32') {
   // npm-style shim, which the runner sees through to `node stub-claude.js`.
@@ -210,7 +137,7 @@ test('the planner reads the whiteboard brief first', () => {
 
 test('the plan is drafted onto the whiteboard, then finalised', () => {
   const writes = ofType('board_write').map((e) => e.text);
-  assert.ok(writes.some((t) => /Writing the plan on the whiteboard \(3 sections\)/.test(t)), `outline mirrored: ${writes}`);
+  assert.ok(writes.some((t) => /Writing the plan on the whiteboard \(5 sections\)/.test(t)), `outline mirrored: ${writes}`);
   assert.ok(writes.some((t) => /Final plan/.test(t)));
   assert.equal(state.board.plan.status, 'final');
   assert.match(state.board.plan.text, /## Tests/);

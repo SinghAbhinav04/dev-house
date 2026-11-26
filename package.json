@@ -32,6 +32,7 @@
     "test:roster": "node --experimental-strip-types scripts/test-roster.mjs",
     "test:slots": "node --experimental-strip-types scripts/test-slots.mjs",
     "team": "node --experimental-strip-types scripts/team.mjs",
+    "demo:replay": "node --experimental-strip-types --no-warnings scripts/demo-replay.mjs",
     "test:memory": "node --experimental-strip-types scripts/test-memory.mjs",
     "test:usage": "node --experimental-strip-types scripts/test-usage.mjs"
   },

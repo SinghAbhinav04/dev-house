@@ -123,6 +123,18 @@ npm run team -- list
 Your team lives in `~/.hackeroom/` — `team.json`, plus a directory per member
 holding their `role.md` and their skills.
 
+### Watch a run without spending tokens
+
+```bash
+npm run dev            # one terminal
+npm run demo:replay    # another: a whole team run, played by a stub CLI
+```
+
+Your team (copied, not changed) plays a scripted kanban build through the real
+orchestrator: the brief on the whiteboard, the plan drafted onto it, tickets
+handed out, a QA huddle, a bug, and the board moving to Done. `--fast` skips
+the thinking time.
+
 ### Requirements
 
 - Node 22+ and pnpm, on Windows, macOS or Linux. Nothing else: the permission
