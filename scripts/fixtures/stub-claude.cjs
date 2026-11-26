@@ -8,6 +8,7 @@
 //   STUB_STATE     directory for per-run counters and the prompt log (required)
 //   STUB_DELAY_MS  how long each turn "thinks" before answering (default 0)
 
+/* eslint-disable @typescript-eslint/no-require-imports -- a CommonJS stand-in for a CLI binary */
 const fs = require('fs');
 const path = require('path');
 
@@ -44,8 +45,25 @@ out({ type: 'system', subtype: 'init', session_id: session });
 let text = 'Done.';
 let structured;
 
+// The roster the orchestrator put in the prompt, as "- slot: Name, title, model — duty".
+const teamLines = prompt
+  .split('\n')
+  .map((line) => /^- (\w+): (.+?) — (.+)$/.exec(line))
+  .filter(Boolean)
+  .map(([, slot, who]) => ({ slot, name: who.split(',')[0].trim() }));
+const nameFor = (slot, fallback) => (teamLines.find((t) => t.slot === slot) || { name: fallback }).name;
+const TEAM_TABLE = [
+  '| Who | Tasks | Estimate | Priority |',
+  '|---|---|---|---|',
+  `| ${nameFor('coder', 'Coder')} (coder) | 1. Board columns and cards<br>2. Drag cards between columns | 25m, 20m | P1, P2 |`,
+  `| ${nameFor('tester', 'Tester')} (tester) | Test plan; asks the coder how to run it, then tests every ticket | 10m | P2 |`,
+  `| ${nameFor('reviewer', 'Reviewer')} (reviewer) | Reviews the plan, then each ticket's branch | — | — |`,
+  ...(teamLines.some((t) => t.slot === 'auditor') ? [`| ${nameFor('auditor', 'Auditor')} (auditor) | Checks card text is never rendered as HTML | — | — |`] : []),
+].join('\n');
+
 const PLAN_SECTIONS = [
   ['Goal', 'A single-page kanban board: columns, cards, drag and drop. Plain HTML and JS, no build step.'],
+  ['Team and tasks', TEAM_TABLE],
   ['Files', '- `index.html` — layout and the three columns\n- `board.js` — state, rendering, drag and drop\n- `styles.css` — the board'],
   ['Behaviour', '- Cards can be added to any column\n- Dragging a card onto a column moves it, including onto an empty column\n- Each column shows its card count'],
   ['Tests', 'Open `index.html`. Add a card, drag it to every column, reload and check it stayed put.'],
@@ -57,9 +75,24 @@ if (statuses.includes('ready')) {
   structured = {
     status: 'ready',
     tickets: [
-      { title: 'Board columns and cards', assignee: 'coder', type: 'story', priority: 'p1', acceptance: ['Three columns render', 'A card can be added'] },
-      { title: 'Drag cards between columns', assignee: 'coder', type: 'story', acceptance: ['Drop moves the card', 'Works on an empty column'] },
-      { title: 'Write the test plan', assignee: 'tester', type: 'task', acceptance: ['Covers every behaviour in the plan'] },
+      {
+        title: 'Board columns and cards',
+        description: 'Build `index.html`, `styles.css` and `board.js`: three columns (**To Do**, **Doing**, **Done**), an *Add card* box, cards saved to `localStorage`.',
+        assignee: 'coder', type: 'story', priority: 'p1', estimateMinutes: 25, tags: ['ui', 'storage'],
+        acceptance: ['Three columns render', 'A card can be added', 'Cards survive a reload'],
+      },
+      {
+        title: 'Drag cards between columns',
+        description: 'HTML5 drag and drop in `board.js`. Dropping anywhere on a column moves the card there, **including an empty column**.',
+        assignee: 'coder', type: 'story', priority: 'p2', estimateMinutes: 20, tags: ['ui', 'drag-drop'],
+        acceptance: ['Drop moves the card', 'Works on an empty column'],
+      },
+      {
+        title: 'Write the test plan',
+        description: 'A short checklist in `TESTPLAN.md` covering every behaviour in the plan.',
+        assignee: 'tester', type: 'task', priority: 'p2', estimateMinutes: 10, tags: ['qa'],
+        acceptance: ['Covers every behaviour in the plan'],
+      },
     ],
   };
 } else if (statuses.includes('asked')) {
@@ -117,9 +150,124 @@ if (statuses.includes('ready')) {
     const ticket = /(DH-\d+) — (.+)/.exec(prompt);
     say(`Working on ${ticket[1]}: ${ticket[2]}.`);
     wait(delay);
+    writeCode(ticket[2]);
     text = `Built ${ticket[1]}.`;
+  } else if (/The tester found (issues|test failures)/.test(prompt)) {
+    say('Fixing what the tester found.');
+    wait(delay / 2);
+    writeCode(/test failures/.test(prompt) ? 'qa fix' : 'review fix');
+    text = 'Fixed.';
   } else {
     wait(delay / 2);
+  }
+}
+
+/**
+ * What the stub coder "builds": a real little kanban, one change per ticket,
+ * so every branch has a diff to review. Only inside a run folder.
+ */
+function writeCode(what) {
+  const dir = process.cwd();
+  if (!fs.existsSync(path.join(dir, 'pipeline-events.json'))) return;
+  const file = (name, body) => fs.writeFileSync(path.join(dir, name), body);
+  const read = (name) => (fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), 'utf8').replace(/\r\n/g, '\n') : '');
+  if (/columns and cards/i.test(what)) {
+    file('index.html', [
+      '<!doctype html>',
+      '<html lang="en">',
+      '<head>',
+      '  <meta charset="utf-8" />',
+      '  <title>Kanban</title>',
+      '  <link rel="stylesheet" href="styles.css" />',
+      '</head>',
+      '<body>',
+      '  <form id="add"><input name="title" placeholder="New card" required /><button>Add</button></form>',
+      '  <main class="board">',
+      '    <section class="column" data-col="todo"><h2>To Do <span class="count">0</span></h2><ul></ul></section>',
+      '    <section class="column" data-col="doing"><h2>Doing <span class="count">0</span></h2><ul></ul></section>',
+      '    <section class="column" data-col="done"><h2>Done <span class="count">0</span></h2><ul></ul></section>',
+      '  </main>',
+      '  <script src="board.js"></script>',
+      '</body>',
+      '</html>',
+      '',
+    ].join('\n'));
+    file('styles.css', [
+      'body { font-family: system-ui, sans-serif; margin: 2rem; background: #f6f3ef; }',
+      '.board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }',
+      '.column { background: #fff; border-radius: 8px; padding: 0.75rem; min-height: 12rem; }',
+      '.column ul { list-style: none; margin: 0; padding: 0; }',
+      '.card { background: #fdf6e3; border-radius: 6px; padding: 0.5rem; margin: 0.4rem 0; }',
+      '',
+    ].join('\n'));
+    file('board.js', [
+      "const KEY = 'kanban-cards';",
+      "let cards = JSON.parse(localStorage.getItem(KEY) || '[]');",
+      '',
+      'function save() {',
+      '  localStorage.setItem(KEY, JSON.stringify(cards));',
+      '}',
+      '',
+      'function render() {',
+      "  for (const column of document.querySelectorAll('.column')) {",
+      "    const list = column.querySelector('ul');",
+      "    list.textContent = '';",
+      '    for (const card of cards.filter((c) => c.col === column.dataset.col)) {',
+      "      const li = document.createElement('li');",
+      "      li.className = 'card';",
+      '      li.textContent = card.title;',
+      '      li.dataset.id = card.id;',
+      '      list.append(li);',
+      '    }',
+      '  }',
+      '}',
+      '',
+      "document.getElementById('add').addEventListener('submit', (e) => {",
+      '  e.preventDefault();',
+      '  const title = e.target.title.value.trim();',
+      '  if (!title) return;',
+      "  cards.push({ id: crypto.randomUUID(), title, col: 'todo' });",
+      '  e.target.reset();',
+      '  save();',
+      '  render();',
+      '});',
+      '',
+      'render();',
+      '',
+    ].join('\n'));
+  } else if (/drag/i.test(what)) {
+    file('board.js', read('board.js').replace(
+      "      li.dataset.id = card.id;\n",
+      "      li.dataset.id = card.id;\n      li.draggable = true;\n      li.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', card.id));\n",
+    ).replace('});\n\nrender();\n', [
+      '});',
+      '',
+      "for (const list of document.querySelectorAll('.column ul')) {",
+      "  list.addEventListener('dragover', (e) => e.preventDefault());",
+      "  list.addEventListener('drop', (e) => {",
+      '    e.preventDefault();',
+      "    const card = cards.find((c) => c.id === e.dataTransfer.getData('text/plain'));",
+      "    if (card) card.col = list.closest('.column').dataset.col;",
+      '    save();',
+      '    render();',
+      '  });',
+      '}',
+      '',
+      'render();',
+      '',
+    ].join('\n')));
+  } else if (what === 'review fix') {
+    file('board.js', read('board.js').replace(
+      '      list.append(li);\n    }\n',
+      "      list.append(li);\n    }\n    column.querySelector('.count').textContent = String(list.children.length);\n",
+    ));
+  } else if (what === 'qa fix') {
+    // Drop on the whole column, not just its list: an empty list has no height.
+    file('board.js', read('board.js')
+      .replace("for (const list of document.querySelectorAll('.column ul')) {", "for (const column of document.querySelectorAll('.column')) {")
+      .replace("  list.addEventListener('dragover', (e) => e.preventDefault());", "  column.addEventListener('dragover', (e) => e.preventDefault());")
+      .replace("  list.addEventListener('drop', (e) => {", "  column.addEventListener('drop', (e) => {")
+      .replace("    if (card) card.col = list.closest('.column').dataset.col;", '    if (card) card.col = column.dataset.col;'));
   }
 }
 

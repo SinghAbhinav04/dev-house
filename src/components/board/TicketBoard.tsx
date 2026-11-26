@@ -11,7 +11,9 @@ import {
   type Ticket,
   type TicketOpInput,
   type TicketType,
+  ticketTimes,
 } from '@/lib/tickets';
+import { MarkdownText } from '@/components/shared/MarkdownText';
 
 export interface BoardPerson {
   id: string;
@@ -47,6 +49,22 @@ function useNow(intervalMs: number) {
     return () => window.clearInterval(timer);
   }, [intervalMs]);
   return now;
+}
+
+/** 1h 05m, 12m, 40s — for estimates and time spent. */
+export function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+function clock(iso: string | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function timeAgo(iso: string, now: number): string {
@@ -285,7 +303,7 @@ function TicketDrawer({
   return (
     <div className="absolute inset-0 z-20 flex justify-end" role="dialog" aria-label={`${ticket.id} details`}>
       <button type="button" aria-label="Close details" onClick={onClose} className="flex-1 cursor-default bg-black/40" />
-      <aside className="flex h-full w-full max-w-md flex-col overflow-hidden border-l border-[rgba(244,236,226,0.12)] bg-[#17130f] shadow-2xl">
+      <aside className="flex h-full w-full max-w-xl flex-col overflow-hidden border-l border-[rgba(244,236,226,0.12)] bg-[#17130f] shadow-2xl">
         <header className="flex items-start gap-3 border-b border-[rgba(244,236,226,0.08)] p-4">
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex items-center gap-2 font-mono text-[10px]">
@@ -298,11 +316,7 @@ function TicketDrawer({
               </span>
             </div>
             <h3 className="text-sm font-bold leading-snug">{ticket.title}</h3>
-            <p className="mt-1 font-mono text-[10px] text-[#8a7a6b]">
-              Assignee <span className="text-[#c9b8a6]">{person(ticket.assignee).name}</span> · Reporter{' '}
-              <span className="text-[#c9b8a6]">{person(ticket.reporter).name}</span> · {ticket.priority.toUpperCase()} · updated{' '}
-              {timeAgo(ticket.updatedAt, now)}
-            </p>
+            <p className="mt-1 font-mono text-[10px] text-[#8a7a6b]">updated {timeAgo(ticket.updatedAt, now)}</p>
           </div>
           <button
             type="button"
@@ -315,7 +329,14 @@ function TicketDrawer({
         </header>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-4 text-[12px]">
-          {ticket.description && <p className="whitespace-pre-wrap leading-relaxed text-[#e8dccd]">{ticket.description}</p>}
+          <TicketDetails ticket={ticket} person={person} now={now} />
+
+          {ticket.description && (
+            <section>
+              <h4 className="mb-1 font-mono text-[10px] font-bold uppercase tracking-wider text-[#8a7a6b]">Description</h4>
+              <MarkdownText className="text-[12px] text-[#e8dccd]">{ticket.description}</MarkdownText>
+            </section>
+          )}
 
           {ticket.acceptance.length > 0 && (
             <section>
@@ -419,5 +440,153 @@ function TicketDrawer({
         )}
       </aside>
     </div>
+  );
+}
+
+const FIELD_LABEL = 'font-mono text-[9px] font-bold uppercase tracking-wider text-[#8a7a6b]';
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className={FIELD_LABEL}>{label}</div>
+      <div className="mt-0.5 truncate text-[12px] text-[#f4ece2]">{children}</div>
+    </div>
+  );
+}
+
+function PersonChip({ who }: { who: BoardPerson }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: who.color }} />
+      {who.name}
+    </span>
+  );
+}
+
+/** The Azure DevOps-style fields: who, when, how big, where the code is. */
+function TicketDetails({
+  ticket,
+  person,
+  now,
+}: {
+  ticket: Ticket;
+  person: (id: string | null | undefined) => BoardPerson;
+  now: number;
+}) {
+  const times = ticketTimes(ticket, now);
+  const [ide, setIde] = useState<{ ok: boolean; text: string } | null>(null);
+  const overdue = times.eta && Date.parse(times.eta) < now;
+  const branch = ticket.branch;
+
+  const openIde = async () => {
+    setIde(null);
+    try {
+      const res = await fetch(`/api/tickets/${encodeURIComponent(ticket.id)}/open`, { method: 'POST' });
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; editor?: string; path?: string };
+      setIde(res.ok && body.ok ? { ok: true, text: `Opened in ${body.editor}` } : { ok: false, text: body.error || 'Could not open an editor' });
+    } catch (err) {
+      setIde({ ok: false, text: (err as Error).message });
+    }
+  };
+
+  return (
+    <>
+      <section className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#1e1915] p-3 sm:grid-cols-3">
+        <Field label="State">
+          <span className="font-bold text-[#d98b4d]">{TICKET_STATUS_LABELS[ticket.status]}</span>
+        </Field>
+        <Field label="Assigned to">
+          <PersonChip who={person(ticket.assignee)} />
+        </Field>
+        <Field label="Dev owner">
+          <PersonChip who={person(ticket.owner ?? ticket.assignee)} />
+        </Field>
+        <Field label="Priority">
+          <span style={{ color: PRIORITY_STYLE[ticket.priority] }} className="font-bold">
+            {ticket.priority.toUpperCase()}
+          </span>
+        </Field>
+        <Field label="Reporter">
+          <PersonChip who={person(ticket.reporter)} />
+        </Field>
+        <Field label="Original estimate">{ticket.estimateMinutes ? formatDuration(ticket.estimateMinutes * 60_000) : '—'}</Field>
+        <Field label="Created">{clock(times.createdAt)}</Field>
+        <Field label="Started">{clock(times.startedAt)}</Field>
+        <Field label={times.completedAt ? 'Completed' : 'ETA'}>
+          {times.completedAt ? (
+            clock(times.completedAt)
+          ) : times.eta ? (
+            <span className={overdue ? 'text-[#cf6c5a]' : ''}>
+              {clock(times.eta)}
+              {overdue ? ' (late)' : ''}
+            </span>
+          ) : (
+            '—'
+          )}
+        </Field>
+        <Field label="Time in progress">{times.activeMs > 0 ? formatDuration(times.activeMs) : '—'}</Field>
+        <Field label="Cycle time">{times.cycleMs !== undefined ? formatDuration(times.cycleMs) : '—'}</Field>
+        <Field label="Review">
+          {ticket.review ? (
+            <span className={ticket.review.verdict === 'approved' ? 'text-[#8fae60]' : 'text-[#cf6c5a]'}>
+              {ticket.review.verdict === 'approved' ? 'Approved' : 'Changes requested'} · {person(ticket.review.by).name}
+            </span>
+          ) : (
+            '—'
+          )}
+        </Field>
+      </section>
+
+      {(ticket.tags ?? []).length > 0 && (
+        <section className="flex flex-wrap gap-1.5">
+          {(ticket.tags ?? []).map((tag) => (
+            <span key={tag} className="rounded-full border border-[#7fa8c9]/40 bg-[#7fa8c9]/10 px-2 py-0.5 font-mono text-[10px] text-[#a9c7df]">
+              {tag}
+            </span>
+          ))}
+        </section>
+      )}
+
+      <section>
+        <h4 className="mb-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-[#8a7a6b]">Development</h4>
+        {branch ? (
+          <div className="space-y-2 rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#1e1915] p-3">
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+              <span className="text-[#8a7a6b]">⑂</span>
+              <a href={`/review/${encodeURIComponent(ticket.id)}`} target="_blank" rel="noreferrer" className="font-bold text-[#7fa8c9] hover:underline">
+                {branch.name}
+              </a>
+              <span className="text-[#8a7a6b]">{branch.merged ? 'merged' : branch.head ? 'open' : 'in progress'}</span>
+              {branch.files !== undefined && (
+                <span className="ml-auto">
+                  <span className="text-[#c9b8a6]">{branch.files} file{branch.files === 1 ? '' : 's'} </span>
+                  <span className="text-[#8fae60]">+{branch.additions ?? 0}</span> <span className="text-[#cf6c5a]">−{branch.deletions ?? 0}</span>
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={`/review/${encodeURIComponent(ticket.id)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg bg-[#7fa8c9] px-3 py-1.5 font-mono text-[11px] font-bold text-[#17130f]"
+              >
+                View changes
+              </a>
+              <button
+                type="button"
+                onClick={openIde}
+                className="rounded-lg border border-[rgba(244,236,226,0.16)] px-3 py-1.5 font-mono text-[11px] font-bold text-[#f4ece2] hover:bg-[#262019]"
+              >
+                Open in IDE
+              </button>
+              {ide && <span className={`font-mono text-[10px] ${ide.ok ? 'text-[#8fae60]' : 'text-[#cf6c5a]'}`}>{ide.text}</span>}
+            </div>
+          </div>
+        ) : (
+          <p className="text-[11px] text-[#8a7a6b]">No branch yet — one is created when work starts.</p>
+        )}
+      </section>
+    </>
   );
 }

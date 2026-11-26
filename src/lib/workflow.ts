@@ -36,6 +36,7 @@ import {
   type TicketStatus,
   type TicketType,
   cleanTags,
+  updateTicketFields,
 } from './tickets.ts';
 
 export interface WorkflowHost {
@@ -58,6 +59,15 @@ export function openTicket(host: WorkflowHost, input: NewTicket): Ticket {
     encodeWorkflowDetail({ ticketId: ticket.id, to: ticket.status, target: ticket.assignee ?? undefined }),
   );
   return ticket;
+}
+
+/** Set a ticket's branch, review, tags… — no narration, these are not moves. */
+export function setFields(
+  host: WorkflowHost,
+  ticketId: string,
+  patch: Parameters<typeof updateTicketFields>[2],
+): void {
+  host.tickets = updateTicketFields(host.tickets, ticketId, patch);
 }
 
 export function move(host: WorkflowHost, ticketId: string, to: TicketStatus, by: string, note?: string): boolean {

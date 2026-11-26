@@ -15,7 +15,6 @@
  * Then open http://localhost:3456
  */
 
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, copyFileSync, existsSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
@@ -102,6 +101,7 @@ import {
 } from '../src/lib/tickets.ts';
 import { applyTicketOps, drainTicketOps } from '../src/lib/workflow-store.ts';
 import * as wf from '../src/lib/workflow.ts';
+import { ensureRepo, finishTicketBranch, git, memberAuthor, startTicketBranch } from '../src/lib/ticket-git.ts';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -518,13 +518,8 @@ writeTeamManifest(projectDir, roster);
 ensureMemoryDirs(projectDir);
 
 // Git init for the project
-if (!existsSync(join(projectDir, '.git'))) {
-  try {
-    execFileSync('git', ['init'], { cwd: projectDir });
-    execFileSync('git', ['add', '.'], { cwd: projectDir });
-    execFileSync('git', ['commit', '-m', 'Initial project setup'], { cwd: projectDir });
-  } catch {}
-}
+// (run-state files excluded, so ticket branches diff only the product).
+ensureRepo(projectDir);
 
 // ── Event System ────────────────────────────────────────────────────
 
@@ -2250,9 +2245,11 @@ async function runDeployStep(aSession: string): Promise<string> {
   emitSupervisor('complete', 'The team finished the build. You can inspect the output now or jump into any specialist chat for follow-up work.');
 
   try {
-    execFileSync('git', ['add', '.'], { cwd: projectDir });
-    execFileSync('git', ['commit', '-m', `Build complete: ${concept.slice(0, 50)}`], { cwd: projectDir });
-    emit('system', 'complete', 'status', 'Code committed to git');
+    const trunk = trunkBranch();
+    if (trunk) git(projectDir, ['checkout', '--quiet', trunk]);
+    git(projectDir, ['add', '-A']);
+    const commit = git(projectDir, ['commit', '-m', `Build complete: ${concept.slice(0, 50)}`], memberAuthor(requireMember('planner')));
+    if (commit.ok) emit('system', 'complete', 'status', 'Code committed to git');
   } catch {}
 
   try {
@@ -2305,7 +2302,10 @@ async function runAuditFixPass(findingId: string): Promise<void> {
     '',
     'When you are done, confirm what you changed in one sentence.',
   ].join('\n');
-  const cResult = await claude('coder', cPrompt, { resume: cSession });
+  const secTicket = finding.ticketId ? state.tickets.find((t) => t.id === finding.ticketId) : undefined;
+  const cResult = await onBranch(secTicket ? [secTicket] : [], requireMember('coder'), 'security-audit', () =>
+    claude('coder', cPrompt, { resume: cSession }),
+  );
   saveSession(id('coder'), cResult.sessionId);
   finding.history.push({ time: nowIso(), action: 'fix-applied' });
   emit(id('coder'), 'security-audit', 'fix', `Applied scoped fix for ${finding.id}`);
@@ -2584,6 +2584,54 @@ async function runBreakdown(aSession: string): Promise<string> {
   return aSession;
 }
 
+// ── Git: a branch per ticket ─────────────────────────────────────────
+
+let gitTrunk: string | null | undefined;
+
+/** The branch tickets are merged into. Worked out once; null if git is unavailable. */
+function trunkBranch(): string | null {
+  if (gitTrunk !== undefined) return gitTrunk;
+  let current = ensureRepo(projectDir);
+  // Resumed mid-ticket: the trunk is whichever of main/master exists.
+  if (current && /^dh-\d+/.test(current)) {
+    current = git(projectDir, ['rev-parse', '--verify', '--quiet', 'main']).ok ? 'main' : 'master';
+  }
+  gitTrunk = current;
+  if (!current) emit('system', 'coding', 'status', 'git is not available — tickets will not get branches');
+  return gitTrunk;
+}
+
+/**
+ * Do a piece of work on its own branch, like a pull request: branch off the
+ * trunk, run the turn, commit as the teammate and merge back. Every ticket in
+ * the batch (a story, or a round of bug fixes) is linked to the branch.
+ */
+async function onBranch<T>(batch: Ticket[], author: TeamMember, phase: string, work: () => Promise<T>): Promise<T> {
+  const lead = batch[0];
+  const trunk = lead ? trunkBranch() : null;
+  const branch = lead && trunk ? startTicketBranch(projectDir, lead, trunk, memberAuthor(author)) : null;
+  if (branch) {
+    for (const t of batch) wf.setFields(workflow, t.id, { branch });
+    emit(author.id, phase, 'status', `Branched ${branch.name} for ${batch.map((t) => t.id).join(', ')}`);
+  }
+  try {
+    return await work();
+  } finally {
+    if (branch && lead && trunk) {
+      const done = finishTicketBranch(projectDir, lead, branch, trunk, memberAuthor(author));
+      for (const t of batch) wf.setFields(workflow, t.id, { branch: done });
+      emit(
+        author.id,
+        phase,
+        'status',
+        done.merged
+          ? `Merged ${done.name} (${done.files ?? 0} file${done.files === 1 ? '' : 's'}, +${done.additions ?? 0} −${done.deletions ?? 0})`
+          : `${done.name} could not be merged automatically — it is left open for review`,
+      );
+    }
+  }
+}
+
 async function runBuildFromCoding(aSession: string): Promise<{ aSession: string; codeReviewRound: number; testRound: number }> {
   setPhase('coding');
   setPipelineStatus('running');
@@ -2608,9 +2656,11 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
     setAgent(coderId, 'active');
     emit(coderId, 'coding', 'status', `Working on ${ticket.id}: ${ticket.title}`);
 
-    const cResult = await claude('coder', wf.buildTicketPrompt(ticket, planPath, firstTicket, queue.length - index - 1), {
-      resume: cSession,
-    });
+    const cResult = await onBranch([ticket], requireMember('coder'), 'coding', () =>
+      claude('coder', wf.buildTicketPrompt(ticket, planPath, firstTicket, queue.length - index - 1), {
+        resume: cSession,
+      }),
+    );
     cSession = cResult.sessionId || cSession;
     if (cSession) saveSession(coderId, cSession);
     firstTicket = false;
@@ -2680,6 +2730,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       codeApproved = true;
       emit(id('tester'), 'code-review', 'approval', 'CODE APPROVED');
       const reviewed = openTicketsFor(coderId, (t) => t.status === 'in-review');
+      for (const t of reviewed) wf.setFields(workflow, t.id, { review: { by: id('tester'), verdict: 'approved', time: new Date().toISOString() } });
       moveAll(reviewed.filter((t) => t.type === 'bug'), ['in-review'], 'done', id('tester'), 'Fixed in review');
       moveAll(reviewed.filter(isWorkItem), ['in-review'], runPlan.phases.testing ? 'in-qa' : 'done', id('tester'), 'Code review passed');
     } else {
@@ -2689,6 +2740,9 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
         emit(id('tester'), 'code-review', 'issue', `Issue ${index + 1}: ${issue}`);
       });
 
+      for (const t of openTicketsFor(coderId, (x) => x.status === 'in-review')) {
+        wf.setFields(workflow, t.id, { review: { by: id('tester'), verdict: 'changes-requested', time: new Date().toISOString() } });
+      }
       const reviewBugs = wf.fileBugs(workflow, issues, {
         reporter: id('tester'),
         assignee: coderId,
@@ -2718,13 +2772,13 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       emit(id('coder'), 'code-review', 'receive', `Received ${issues.length} issue(s) from D`);
 
       moveAll(reviewBugs, ['todo'], 'in-progress', coderId, 'Fixing');
-      const cReviewFollowup = await claude('coder', [
+      const cReviewFollowup = await onBranch(reviewBugs, requireMember('coder'), 'code-review', () => claude('coder', [
         'The tester found issues with your code:',
         '',
         ...issues.map((issue, index) => `${index + 1}. ${reviewBugs[index] ? `${reviewBugs[index].id}: ` : ''}${issue}`),
         '',
         'Fix each issue. Do not modify plan.md.',
-      ].join('\n'), { resume: cSession });
+      ].join('\n'), { resume: cSession }));
       cSession = cReviewFollowup.sessionId;
       saveSession(id('coder'), cSession);
 
@@ -2832,13 +2886,13 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       emit(id('coder'), 'testing', 'receive', `Received ${failures.length} failure(s) from D`);
 
       moveAll(qaBugs, ['todo'], 'in-progress', coderId, 'Fixing');
-      const cTestFollowup = await claude('coder', [
+      const cTestFollowup = await onBranch(qaBugs, requireMember('coder'), 'testing', () => claude('coder', [
         'The tester found test failures:',
         '',
         ...failures.map((failure, index) => `${index + 1}. ${qaBugs[index] ? `${qaBugs[index].id}: ` : ''}${failure}`),
         '',
         'Fix each failure. Do not modify plan.md.',
-      ].join('\n'), { resume: cSession });
+      ].join('\n'), { resume: cSession }));
       cSession = cTestFollowup.sessionId;
       saveSession(id('coder'), cSession);
 

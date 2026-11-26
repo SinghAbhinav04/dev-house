@@ -278,6 +278,8 @@ export function assignTicket(
     return {
       ...ticket,
       assignee,
+      // The first person given the work owns it, even when QA holds it later.
+      owner: ticket.owner ?? assignee,
       updatedAt: now,
       history: [
         ...ticket.history,

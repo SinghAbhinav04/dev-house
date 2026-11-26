@@ -7,6 +7,7 @@
 // No tokens: the stub answers each turn from what the prompt and schema ask.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { spawn, execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -137,10 +138,51 @@ test('the planner reads the whiteboard brief first', () => {
 
 test('the plan is drafted onto the whiteboard, then finalised', () => {
   const writes = ofType('board_write').map((e) => e.text);
-  assert.ok(writes.some((t) => /Writing the plan on the whiteboard \(5 sections\)/.test(t)), `outline mirrored: ${writes}`);
+  assert.ok(writes.some((t) => /Writing the plan on the whiteboard \(6 sections\)/.test(t)), `outline mirrored: ${writes}`);
   assert.ok(writes.some((t) => /Final plan/.test(t)));
   assert.equal(state.board.plan.status, 'final');
   assert.match(state.board.plan.text, /## Tests/);
+});
+
+test('the planner is shown the real team and plans who does what', () => {
+  const write = prompts.find((p) => /Write the full build plan/.test(p.prompt));
+  assert.match(write.prompt, /Your team for this run:/);
+  assert.match(write.prompt, /- coder: /);
+  assert.match(write.prompt, /Team and tasks/);
+  assert.match(state.board.plan.text, /## Team and tasks/);
+  const breakdown = prompts.find((p) => /Break it into tickets/.test(p.prompt));
+  assert.match(breakdown.prompt, /only members with a seat can be given work/);
+});
+
+test('tickets carry estimates, tags and a dev owner', () => {
+  const story = byTitle('Board columns and cards');
+  assert.equal(story.estimateMinutes, 25);
+  assert.deepEqual(story.tags, ['ui', 'storage']);
+  assert.equal(story.owner, 'coder');
+});
+
+test('each story is built on its own branch, committed by the coder and merged', () => {
+  const first = byTitle('Board columns and cards').branch;
+  const second = byTitle('Drag cards between columns').branch;
+  assert.equal(first.name, 'dh-2-board-columns-and-cards');
+  assert.equal(first.merged, true);
+  assert.equal(first.files, 3, 'index.html, styles.css, board.js — no run state');
+  assert.equal(second.files, 1, 'only board.js changed for drag and drop');
+  assert.ok(second.additions > 0);
+  const log = spawnSync('git', ['log', '--format=%an|%s', first.head, '-1'], { cwd: projectDir, encoding: 'utf8' }).stdout.trim();
+  assert.match(log, /\|DH-2: Board columns and cards$/);
+  assert.doesNotMatch(log, /^Hackeroom\|/, 'authored by the teammate, not a generic bot');
+});
+
+test('bug fixes get their own branch too, and the review verdicts are recorded', () => {
+  const reviewBug = byTitle('The card count badge is never updated.');
+  assert.match(reviewBug.branch.name, /^dh-\d+-the-card-count-badge/);
+  assert.equal(reviewBug.branch.files, 1);
+  const qaBug = byTitle('Dropping a card on an empty column does nothing.');
+  assert.equal(qaBug.branch.merged, true);
+  const story = byTitle('Drag cards between columns');
+  assert.equal(story.review.verdict, 'approved');
+  assert.equal(story.review.by, 'tester');
 });
 
 test('the plan is a story that went Solutioning → Done', () => {
