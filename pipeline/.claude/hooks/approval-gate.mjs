@@ -97,17 +97,65 @@ function realOr(path) {
 }
 
 /**
- * Case-folded and with one separator, for comparisons only. The shell version
- * always lowercased (the filesystem under ~/Builds is usually
- * case-insensitive); Windows also mixes separators.
+ * With one separator, on the platform that has two. On POSIX a backslash is an
+ * ordinary character in a name: `proj\\x` is a file beside `proj`, not one
+ * inside it, and reading it as a separator let a jailed member write there.
  */
-function fold(path) {
-  return path.replace(/\\/g, '/').toLowerCase();
+function slashes(path) {
+  return IS_WINDOWS ? path.replace(/\\/g, '/') : path;
 }
 
-function isInside(childFolded, parentFolded) {
-  const base = parentFolded.endsWith('/') ? parentFolded : `${parentFolded}/`;
-  return childFolded.startsWith(base);
+/**
+ * Lowercased as well, for the rules that REFUSE: a config directory or a
+ * control file is caught under any capitalisation, on every filesystem. Too
+ * strict where case matters is the safe way to be wrong.
+ */
+function fold(path) {
+  return slashes(path).toLowerCase();
+}
+
+/**
+ * Whether two names that differ only in case are the same file here. Asked of
+ * a directory that exists.
+ *
+ * The rules that PERMIT (inside ~/Builds, inside the project, inside the memory
+ * inbox) must compare paths the way the filesystem does. Lowercasing always,
+ * as the shell version did, is right on a Mac and wrong on Linux, where
+ * ~/builds/proj is not ~/Builds/proj. It used to be backed up by the refusal
+ * of any path whose directory was missing; now that a new directory is
+ * allowed, a member could otherwise create a whole tree at a differently
+ * capitalised copy of its own project path.
+ *
+ * The test is whether the directory answers to its own name in the other
+ * case, as the same inode. lstat, so a symlink planted under that name does
+ * not count. Anything unexpected reads as "case matters", the stricter answer.
+ */
+function ignoresCase(dir) {
+  if (IS_WINDOWS) return true;
+  let probe = dir;
+  for (;;) {
+    const name = basename(probe);
+    const parent = dirname(probe);
+    const other = name === name.toLowerCase() ? name.toUpperCase() : name.toLowerCase();
+    if (other !== name) {
+      try {
+        const here = lstatSync(probe);
+        const there = lstatSync(join(parent, other));
+        return here.dev === there.dev && here.ino === there.ino;
+      } catch {
+        return false;
+      }
+    }
+    // A name with no letters in it says nothing; ask the directory above.
+    if (parent === probe) return false;
+    probe = parent;
+  }
+}
+
+/** Both arguments in the same form: `fold()`ed, or as `sameAs()` below gives them. */
+function isInside(child, parent) {
+  const base = parent.endsWith('/') ? parent : `${parent}/`;
+  return child.startsWith(base);
 }
 
 function isFile(path) {
@@ -346,13 +394,20 @@ async function main() {
     const projectFolded = fold(projectRoot);
     const eventsFile = join(projectRoot, 'pipeline-events.json');
 
-    const inBuilds = isInside(fileFolded, fold(buildsDir));
-    const inPipelineProject = isFile(eventsFile) && isInside(fileFolded, projectFolded);
+    // What a path is compared as when the answer may be "yes, write there":
+    // folded only as far as this filesystem folds it.
+    const caseBlind = ignoresCase(projectRoot);
+    const sameAs = (path) => (caseBlind ? fold(path) : slashes(path));
+    const fileKey = sameAs(filePath);
+    const projectKey = sameAs(projectRoot);
+
+    const inBuilds = isInside(fileKey, sameAs(buildsDir));
+    const inPipelineProject = isFile(eventsFile) && isInside(fileKey, projectKey);
     if (!inBuilds && !inPipelineProject) deny(`Cannot write to ${filePath} — outside the active pipeline project`);
 
     // Jail every member to the project root unless their write level is
     // "builds", which the roster only ever grants to the supervisor slot.
-    if (memberWrite !== 'builds' && !isInside(fileFolded, projectFolded)) {
+    if (memberWrite !== 'builds' && !isInside(fileKey, projectKey)) {
       deny(`Cannot write to ${filePath} — outside current project`);
     }
 
@@ -373,9 +428,9 @@ async function main() {
 
     // Shared-memory inbox: any member may drop a new .md entry directly into
     // it (Write only, never Edit, no nesting). Everything else there is denied.
-    const inboxFolded = fold(join(projectRoot, '.squad', 'memory', 'inbox'));
-    if (isInside(fileFolded, inboxFolded)) {
-      const rel = filePath.replace(/\\/g, '/').slice(inboxFolded.length + 1);
+    const inboxKey = sameAs(join(projectRoot, '.squad', 'memory', 'inbox'));
+    if (isInside(fileKey, inboxKey)) {
+      const rel = slashes(filePath).slice(inboxKey.length + 1);
       if (toolName === 'Write' && /^[A-Za-z0-9._-]+\.md$/.test(rel)) allow();
       deny('The memory inbox only accepts new .md files written directly into it');
     }

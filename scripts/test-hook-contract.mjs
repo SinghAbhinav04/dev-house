@@ -14,7 +14,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,6 +73,15 @@ try {
   fileLinkMade = false;
   console.warn('*** SKIP "nor is a symlink to a file": this Windows account cannot create symlinks');
 }
+
+// Whether this filesystem treats two names that differ only in case as one
+// file: true on a Mac and on Windows as they come, false on Linux. The gate
+// has to answer the same way, so the cases below expect whichever is true
+// here, and CI runs all three.
+const caseBlind = existsSync(join(buildsDir, 'CONTRACT-PROJECT'));
+// A backslash separates directories on Windows and is a character in a name
+// everywhere else.
+const backslashIsSeparator = process.platform === 'win32';
 
 /**
  * A deliberately un-alphabetic roster: nothing here would pass the old
@@ -511,6 +520,58 @@ const checks = [
     expect: 'deny',
     run: () => invokeHook({ agent: 'rex', toolName: 'Write', toolInput: { file_path: join(memoryInbox, 'newsub', 'x.md'), content: 'x' } }),
   },
+
+  // ── A path is inside a directory only if the filesystem says so ────
+  //
+  // The rules that permit a write compare the path with ~/Builds, the project
+  // and the memory inbox. Comparing them lowercased and with every backslash
+  // read as a separator is true on some filesystems and not on others, and it
+  // used to be backed up by the refusal of any path whose directory was
+  // missing. With new directories allowed, each of these has to be right.
+  {
+    name: 'a .. inside the project is refused too: nothing normalises it away first',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'src/../x.txt', content: 'x' } }),
+  },
+  {
+    name: 'and so is one that follows a symlink out, where the text and the filesystem disagree',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'outlink/../x.txt', content: 'x' } }),
+  },
+  {
+    name: 'a differently capitalised copy of the project path is the project only where the filesystem says so',
+    expect: caseBlind ? 'allow' : 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: join(buildsDir, 'CONTRACT-PROJECT', 'newdir', 'x.txt'), content: 'x' } }),
+  },
+  {
+    name: 'the same for ~/Builds itself, for the supervisor',
+    expect: caseBlind ? 'allow' : 'deny',
+    run: () => invokeHook({ agent: 'sam', toolName: 'Write', toolInput: { file_path: join(tempHome, 'BUILDS', 'newproject', 'x.txt'), content: 'x' } }),
+  },
+  {
+    name: 'and for the memory inbox, for a member that can write nowhere else',
+    expect: caseBlind ? 'allow' : 'deny',
+    run: () => invokeHook({ agent: 'rex', toolName: 'Write', toolInput: { file_path: '.SQUAD/memory/inbox/note.md', content: 'x' } }),
+  },
+  ...(backslashIsSeparator
+    ? []
+    : [
+        {
+          name: 'a backslash is part of a name, not a way into the project',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: `${projectDir}\\evil.txt`, content: 'x' } }),
+        },
+        {
+          name: 'nor into a new directory beside it',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: `${projectDir}\\newdir/evil.txt`, content: 'x' } }),
+        },
+        {
+          name: 'nor into the memory inbox',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'rex', toolName: 'Write', toolInput: { file_path: '.squad/memory/inbox\\note.md', content: 'x' } }),
+        },
+      ]),
   {
     name: 'project-write member cannot touch .claude/',
     expect: 'deny',

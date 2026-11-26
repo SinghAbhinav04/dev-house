@@ -84,6 +84,14 @@ on the same machine.
   It still refuses a path through anything that exists without being a
   directory (a file, a dangling symlink, a symlink to a file) and a `.` or
   `..` among the missing components, and every rule that follows is unchanged.
+- **The gate compares paths the way the filesystem does.** Paths were
+  lowercased, and every backslash read as a separator, before the gate asked
+  whether a write was inside `~/Builds`, the project or the memory inbox. On
+  Linux neither is true: a member jailed to its project could write the file
+  `proj\evil.txt` beside it, and a member with no write access could write
+  beside the memory inbox. Both comparisons now fold only what the filesystem
+  folds. A relative path containing `..` is refused again, as it was before
+  the gate moved to Node.
 
 ### Upgrading
 
