@@ -58,6 +58,7 @@ export default function PipelinePage() {
   const {
     state, sendChat, startPipeline, resumePipeline, stopPipeline, setStopAfterReview, approveBash, getPlan, resetState, agentEvents, agentSpeech,
     sendFindingToC, dismissFinding, deployAfterAudit,
+    submitBrief, sendTicketOp,
     pendingApproval,
     connected,
   } = usePipelineState({ mode, model: selectedModel });
@@ -833,8 +834,10 @@ export default function PipelinePage() {
             seats={seats}
             guests={guests}
             members={officeMembers}
-            initialPlan={planContent || ''}
-            onSavePlan={(plan) => setPlanContent(plan)}
+            board={state.board}
+            tickets={state.tickets}
+            onSubmitBrief={submitBrief}
+            onTicketOp={sendTicketOp}
             onAgentClick={(id) => { setSelectedAgent(id); }}
             onViewSwitch={(m) => setStudioView(m)}
             isPipelineRunning={isPipeline && state.pipelineStatus === 'running'}

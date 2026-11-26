@@ -296,6 +296,9 @@ export type TicketOp =
   | { kind: 'reopen'; ticketId: string; note?: string; time: string }
   | { kind: 'move'; ticketId: string; to: TicketStatus; note?: string; time: string };
 
+/** An op as the UI sends it; the server stamps `time`. Distributes over the union. */
+export type TicketOpInput = TicketOp extends infer Op ? (Op extends TicketOp ? Omit<Op, 'time'> : never) : never;
+
 export function isTicketOp(value: unknown): value is TicketOp {
   if (!value || typeof value !== 'object') return false;
   const op = value as Record<string, unknown>;

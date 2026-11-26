@@ -29,7 +29,7 @@ export interface WorkstationsResult {
   setActiveFloor: (floorNum: number) => void;
   updateStatus: (slot: SlotId, status: string, timeSec: number, speech?: string | null) => void;
   updateCommanderScreen: (timeSec: number) => void;
-  updateWhiteboardPlan: (planText: string) => void;
+  updateWhiteboardPlan: (content: WhiteboardContent) => void;
   dispose: () => void;
 }
 
@@ -39,6 +39,14 @@ export interface WorkstationsResult {
  * - 1F (Ground Atrium): Reception Desk & Lounge
  * - 3F (Sky Suite): Expansion Suite (Under Construction / Coming Soon)
  */
+/** What the studio whiteboard shows: the user's brief and the planner's plan. */
+export interface WhiteboardContent {
+  brief?: string;
+  plan?: string;
+  planBy?: string;
+  planStatus?: 'drafting' | 'final';
+}
+
 export const WORKSTATION_CONFIGS: Array<WorkstationDef & { floorNumber: number }> = [
   // 2F Dev House Engineering Floor - WHOLE TEAM TOGETHER (Pixel-accurate tight collision bounds)
   {
@@ -456,7 +464,7 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
   wbCanvas.height = 576;
   const wbCtx = wbCanvas.getContext('2d')!;
 
-  const renderWhiteboardPlan = (text: string) => {
+  const renderWhiteboardPlan = (content: WhiteboardContent) => {
     // Crisp dry-erase board background with light subtle grid
     wbCtx.fillStyle = '#f8fafc';
     wbCtx.fillRect(0, 0, 1024, 576);
@@ -477,63 +485,111 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
       wbCtx.stroke();
     }
 
-    // Header bar
-    wbCtx.fillStyle = '#0f172a';
-    wbCtx.font = 'bold 22px monospace';
-    wbCtx.fillText('DEV HOUSE • MISSION ARCHITECTURE PLAN', 36, 42);
+    // Two columns, like a real team board: what you asked for on the left,
+    // the planner's plan on the right as it is being written.
+    const COL_W = 452;
+    const LEFT_X = 36;
+    const RIGHT_X = 536;
+    const TOP = 74;
+    const BOTTOM = 520;
 
-    wbCtx.fillStyle = '#64748b';
-    wbCtx.font = '13px monospace';
-    wbCtx.fillText('AUTONOMOUS AGENT PIPELINE SPECIFICATION', 36, 68);
+    const wrap = (raw: string, font: string, width: number): string[] => {
+      wbCtx.font = font;
+      const out: string[] = [];
+      for (const paragraph of raw.split('\n')) {
+        const words = paragraph.replace(/\t/g, '  ').split(' ');
+        let line = '';
+        for (const word of words) {
+          const next = line ? `${line} ${word}` : word;
+          if (wbCtx.measureText(next).width > width && line) {
+            out.push(line);
+            line = word;
+          } else {
+            line = next;
+          }
+        }
+        out.push(line);
+      }
+      return out;
+    };
 
-    wbCtx.strokeStyle = '#3b82f6';
-    wbCtx.lineWidth = 3;
-    wbCtx.beginPath();
-    wbCtx.moveTo(36, 82);
-    wbCtx.lineTo(988, 82);
-    wbCtx.stroke();
+    const column = (x: string | undefined, left: number, title: string, subtitle: string, accent: string, empty: string) => {
+      wbCtx.fillStyle = accent;
+      wbCtx.font = 'bold 20px monospace';
+      wbCtx.fillText(title, left, 44);
+      wbCtx.fillStyle = '#64748b';
+      wbCtx.font = '13px monospace';
+      wbCtx.fillText(subtitle, left, 64);
+      wbCtx.strokeStyle = accent;
+      wbCtx.lineWidth = 3;
+      wbCtx.beginPath();
+      wbCtx.moveTo(left, TOP);
+      wbCtx.lineTo(left + COL_W, TOP);
+      wbCtx.stroke();
 
-    // Render lines of plan in dry-erase marker style
-    const defaultLines = `# Mission Architecture Plan\n- [x] Modern 3D Studio & 6-Agent Workspace\n- [ ] Multi-Agent Autonomous Build Pipeline\n- [ ] Vitest Suite & Automated Contracts`;
-    const lines = (text && text.trim().length > 0 ? text : defaultLines)
-      .split('\n')
-      .slice(0, 16);
-
-    let currentY = 118;
-    lines.forEach((line) => {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('#')) {
-        wbCtx.fillStyle = '#1e3a8a'; // Blue marker for headings
-        wbCtx.font = 'bold 18px monospace';
-      } else if (trimmed.startsWith('- [x]') || trimmed.startsWith('[x]')) {
-        wbCtx.fillStyle = '#166534'; // Green marker for checked tasks
-        wbCtx.font = 'bold 15px monospace';
-      } else if (trimmed.startsWith('- [ ]') || trimmed.startsWith('[ ]')) {
-        wbCtx.fillStyle = '#b45309'; // Amber marker for pending tasks
-        wbCtx.font = 'bold 15px monospace';
-      } else if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
-        wbCtx.fillStyle = '#334155'; // Dark charcoal marker for bullet points
-        wbCtx.font = '15px monospace';
-      } else {
-        wbCtx.fillStyle = '#475569';
-        wbCtx.font = '14px monospace';
+      const text = (x ?? '').trim();
+      if (!text) {
+        wbCtx.fillStyle = '#94a3b8';
+        wbCtx.font = 'italic 15px monospace';
+        wrap(empty, 'italic 15px monospace', COL_W).forEach((line, i) => wbCtx.fillText(line, left, TOP + 34 + i * 22));
+        return;
       }
 
-      wbCtx.fillText(line.substring(0, 68), 36, currentY);
-      currentY += 26;
-    });
+      let y = TOP + 30;
+      for (const rawLine of text.split('\n')) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) {
+          y += 8;
+          continue;
+        }
+        const heading = trimmed.startsWith('#');
+        const font = heading ? 'bold 16px monospace' : '14px monospace';
+        wbCtx.fillStyle = heading ? accent : trimmed.startsWith('-') || trimmed.startsWith('*') ? '#334155' : '#475569';
+        const lines = wrap(heading ? trimmed.replace(/^#+\s*/, '') : rawLine, font, COL_W);
+        for (const line of lines) {
+          if (y > BOTTOM - 4) {
+            wbCtx.fillStyle = '#94a3b8';
+            wbCtx.font = 'bold 14px monospace';
+            wbCtx.fillText('…', left, BOTTOM + 6);
+            return;
+          }
+          wbCtx.font = font;
+          wbCtx.fillText(line, left, y);
+          y += heading ? 24 : 20;
+        }
+      }
+    };
+
+    const planLabel = content.planStatus === 'final' ? 'final' : content.planStatus === 'drafting' ? 'writing…' : '';
+    column(content.brief, LEFT_X, 'BRIEF', 'from you', '#0f172a', 'Nothing here yet. Press E or click the board to write what you want built.');
+    column(
+      content.plan,
+      RIGHT_X,
+      'PLAN',
+      `${content.planBy ? `by ${content.planBy}` : 'by the planner'}${planLabel ? ` · ${planLabel}` : ''}`,
+      '#1d4ed8',
+      content.brief ? 'The planner will draft the plan here once the run starts.' : 'Submit a brief and the planner writes the plan here.',
+    );
+
+    // Divider between the columns
+    wbCtx.strokeStyle = 'rgba(100, 116, 139, 0.35)';
+    wbCtx.lineWidth = 2;
+    wbCtx.beginPath();
+    wbCtx.moveTo(512, 28);
+    wbCtx.lineTo(512, BOTTOM);
+    wbCtx.stroke();
 
     // Bottom action callout
     wbCtx.fillStyle = '#0f172a';
-    wbCtx.fillRect(36, 524, 952, 36);
+    wbCtx.fillRect(36, 530, 952, 32);
     wbCtx.fillStyle = '#f8fafc';
     wbCtx.font = 'bold 13px monospace';
     wbCtx.textAlign = 'center';
-    wbCtx.fillText('PRESS [E] OR CLICK TO VIEW & EDIT PIPELINE PLAN', 512, 547);
+    wbCtx.fillText('PRESS [E] OR CLICK TO WRITE THE BRIEF', 512, 551);
     wbCtx.textAlign = 'left';
   };
 
-  renderWhiteboardPlan('');
+  renderWhiteboardPlan({});
 
   const wbTexture = new THREE.CanvasTexture(wbCanvas);
   wbTexture.colorSpace = THREE.SRGBColorSpace;
@@ -716,8 +772,8 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
     materials.forEach((m) => m.dispose());
   };
 
-  const updateWhiteboardPlan = (planText: string) => {
-    renderWhiteboardPlan(planText);
+  const updateWhiteboardPlan = (content: WhiteboardContent) => {
+    renderWhiteboardPlan(content);
     wbTexture.needsUpdate = true;
   };
 

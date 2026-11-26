@@ -1,15 +1,17 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import type { SeatMap, SeatOccupant } from '@/components/mission/LunarOfficeScene';
 import type { OfficeMember } from '@/components/mission/MemberStatCard';
 import type { SlotId } from '@/lib/team/types';
-import type { StudioCanvasProps } from './StudioCanvas';
+import type { BoardState, Ticket, TicketOpInput } from '@/lib/tickets';
+import { TicketBoard } from '@/components/board/TicketBoard';
+import type { StudioCanvasProps, WhiteboardContent } from './StudioCanvas';
 import type { TimeOfDayMode } from './core/day-night-cycle';
 import { CharacterInspectorModal } from './hud/CharacterInspectorModal';
-import { CommandTerminalModal } from './hud/CommandTerminalModal';
-import { WhiteboardModal } from './hud/WhiteboardModal';
+import { CommandTerminalModal, type CommandTerminalTab } from './hud/CommandTerminalModal';
+import { WhiteboardModal, type BriefSubmitResult } from './hud/WhiteboardModal';
 
 // Dynamically import StudioCanvas with ssr: false so Three.js only executes client-side
 const StudioCanvas = dynamic<StudioCanvasProps>(
@@ -37,8 +39,11 @@ export interface DevHouseStudio3DProps {
   seats?: SeatMap;
   guests?: SeatOccupant[];
   members?: OfficeMember[];
-  initialPlan?: string;
-  onSavePlan?: (plan: string) => void;
+  /** The run's whiteboard (brief and plan) and ticket board. */
+  board?: BoardState;
+  tickets?: Ticket[];
+  onSubmitBrief?: (text: string, start: boolean) => Promise<BriefSubmitResult>;
+  onTicketOp?: (op: TicketOpInput) => Promise<{ ok: boolean; error?: string; queued?: boolean }>;
   onAgentClick?: (agentId: string) => void;
   onViewSwitch?: (mode: '2d' | '3d') => void;
   // Slots for embedding existing page controls in Command Terminal
@@ -57,8 +62,10 @@ export function DevHouseStudio3D({
   seats = {},
   guests = [],
   members = [],
-  initialPlan = '',
-  onSavePlan,
+  board,
+  tickets = [],
+  onSubmitBrief,
+  onTicketOp,
   onAgentClick,
   onViewSwitch,
   pipelineControlsNode,
@@ -70,12 +77,22 @@ export function DevHouseStudio3D({
 }: DevHouseStudio3DProps) {
   // Command Terminal ("My Desk") Modal State
   const [isCommanderOpen, setIsCommanderOpen] = useState(false);
-  const [commanderTab, setCommanderTab] = useState<'team' | 'pipeline' | 'chat' | 'feed'>('team');
+  const [commanderTab, setCommanderTab] = useState<CommandTerminalTab>('board');
 
-  // Whiteboard Modal State
+  // Whiteboard: the run's own board state is the only source of truth, so a
+  // plan the planner writes always shows, whatever was typed before.
   const [isWhiteboardOpen, setIsWhiteboardOpen] = useState(false);
-  const [userEditedPlan, setUserEditedPlan] = useState<string | null>(null);
-  const currentPlan = userEditedPlan ?? initialPlan;
+  const memberName = useCallback((id?: string) => members.find((m) => m.id === id)?.name ?? id, [members]);
+  const whiteboard = useMemo<WhiteboardContent>(
+    () => ({
+      brief: board?.brief?.text,
+      plan: board?.plan?.text,
+      planBy: memberName(board?.plan?.by),
+      planStatus: board?.plan?.status,
+    }),
+    [board?.brief?.text, board?.plan?.text, board?.plan?.by, board?.plan?.status, memberName],
+  );
+  const people = useMemo(() => members.map((m) => ({ id: m.id, name: m.name, color: m.color })), [members]);
 
   // Environmental Controls State (Unified top bar, zero overlap!)
   const [timeOfDayMode, setTimeOfDayMode] = useState<TimeOfDayMode>('day');
@@ -85,14 +102,14 @@ export function DevHouseStudio3D({
     cycleTimeOfDay: () => void;
     toggleLights: () => void;
     toggleAC: () => void;
-    updateWhiteboardPlan: (plan: string) => void;
+    updateWhiteboardPlan: (content: WhiteboardContent) => void;
   } | null>(null);
 
   const handleControlsReady = useCallback((ctrls: {
     cycleTimeOfDay: () => void;
     toggleLights: () => void;
     toggleAC: () => void;
-    updateWhiteboardPlan: (plan: string) => void;
+    updateWhiteboardPlan: (content: WhiteboardContent) => void;
   }) => {
     studioControlsRef.current = ctrls;
   }, []);
@@ -168,7 +185,7 @@ export function DevHouseStudio3D({
           <button
             type="button"
             onClick={() => {
-              setCommanderTab('team');
+              setCommanderTab('board');
               setIsCommanderOpen(true);
             }}
             className="flex items-center gap-2 rounded-xl border border-[#d98b4d]/40 bg-[#1e1915]/95 px-3.5 py-1.5 text-xs font-bold text-[#f4ece2] shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-md transition-all hover:scale-105 hover:bg-[#d98b4d]/20 active:scale-95"
@@ -216,7 +233,7 @@ export function DevHouseStudio3D({
           seats={seats}
           guests={guests}
           members={members}
-          initialPlan={currentPlan}
+          whiteboard={whiteboard}
           onControlsReady={handleControlsReady}
           onAgentClick={(agentId) => {
             const member = members.find((m) => m.id === agentId);
@@ -226,7 +243,10 @@ export function DevHouseStudio3D({
             }
             onAgentClick?.(agentId);
           }}
-          onOpenCommanderDesk={() => setIsCommanderOpen(true)}
+          onOpenCommanderDesk={() => {
+            setCommanderTab('board');
+            setIsCommanderOpen(true);
+          }}
           onOpenWhiteboard={() => setIsWhiteboardOpen(true)}
           onInspectCharacter={(member, slot, status) => {
             setInspectorMember(member);
@@ -240,18 +260,12 @@ export function DevHouseStudio3D({
       <WhiteboardModal
         isOpen={isWhiteboardOpen}
         onClose={() => setIsWhiteboardOpen(false)}
-        initialPlan={currentPlan}
-        onSavePlan={(newPlan) => {
-          setUserEditedPlan(newPlan);
-          studioControlsRef.current?.updateWhiteboardPlan(newPlan);
-          onSavePlan?.(newPlan);
-        }}
-        onStartPipelineWithPlan={(newPlan) => {
-          setUserEditedPlan(newPlan);
-          studioControlsRef.current?.updateWhiteboardPlan(newPlan);
-          onSavePlan?.(newPlan);
-          onStartPipeline();
-        }}
+        brief={board?.brief?.text}
+        plan={board?.plan?.text}
+        planStatus={board?.plan?.status}
+        planBy={whiteboard.planBy}
+        runActive={isPipelineRunning}
+        onSubmitBrief={onSubmitBrief}
       />
 
       {/* Character Inspector Modal (When tapping any 3D dev) */}
@@ -285,6 +299,7 @@ export function DevHouseStudio3D({
         pipelineControlsNode={pipelineControlsNode}
         chatNode={chatNode}
         feedNode={feedNode}
+        boardNode={<TicketBoard tickets={tickets} people={people} onOp={onTicketOp} compact />}
       />
     </div>
   );

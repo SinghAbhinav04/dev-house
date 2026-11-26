@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import type { PipelineRuntimeState } from '@/lib/pipeline-runtime';
-import type { BoardState, Ticket, TicketOp } from '@/lib/tickets';
+import type { BoardState, Ticket, TicketOpInput } from '@/lib/tickets';
 
 /**
  * A roster member id. Members are user-authored, so this is any slug — the
@@ -354,7 +354,7 @@ export function usePipelineState({ pollInterval = 1500, mode, model }: UsePipeli
     return { ok: res.ok && data?.ok !== false, ...data } as { ok: boolean; error?: string; started?: boolean };
   }, []);
 
-  const sendTicketOp = useCallback(async (op: Omit<TicketOp, 'time'>) => {
+  const sendTicketOp = useCallback(async (op: TicketOpInput) => {
     const res = await fetch('/api/tickets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

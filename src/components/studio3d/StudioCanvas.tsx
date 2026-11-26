@@ -9,7 +9,9 @@ import { SLOT_LABELS } from '@/lib/team/types';
 import { createStarfield } from './core/starfield';
 import { buildFloatingIsland } from './core/island-builder';
 import { buildStudioArchitecture, DEV_HOUSE_FLOORS } from './core/studio-architecture';
-import { buildWorkstations, WORKSTATION_CONFIGS } from './core/workstation-builder';
+import { buildWorkstations, WORKSTATION_CONFIGS, type WhiteboardContent } from './core/workstation-builder';
+
+export type { WhiteboardContent };
 import { buildInteractiveRoomFeatures } from './core/interactive-room-features';
 import { buildExteriorScenery, type ExteriorSceneryResult } from './core/exterior-scenery';
 import { createDayNightCycle, type DayNightCycleResult, type TimeOfDayMode } from './core/day-night-cycle';
@@ -34,7 +36,8 @@ export interface StudioCanvasProps {
   timeOfDayMode?: TimeOfDayMode;
   isLightsOn?: boolean;
   isACOn?: boolean;
-  initialPlan?: string;
+  /** What the whiteboard shows; drawn again whenever this object changes. */
+  whiteboard?: WhiteboardContent;
   onAgentClick?: (agentId: string) => void;
   onOpenCommanderDesk?: () => void;
   onInspectCharacter?: (member: OfficeMember, slot?: SlotId, status?: string) => void;
@@ -43,7 +46,7 @@ export interface StudioCanvasProps {
     cycleTimeOfDay: () => void;
     toggleLights: () => void;
     toggleAC: () => void;
-    updateWhiteboardPlan: (plan: string) => void;
+    updateWhiteboardPlan: (content: WhiteboardContent) => void;
   }) => void;
 }
 
@@ -83,7 +86,7 @@ export function StudioCanvas({
   timeOfDayMode: controlledTimeMode,
   isLightsOn: controlledLights,
   isACOn: controlledAC,
-  initialPlan = '',
+  whiteboard,
   onAgentClick,
   onOpenCommanderDesk,
   onInspectCharacter,
@@ -118,7 +121,7 @@ export function StudioCanvas({
   const elevatorRideTriggerRef = useRef<((floorNum: number) => void) | null>(null);
   const featureActionTriggerRef = useRef<((feature: 'lights' | 'ac' | 'coffeeMachine' | 'coffeeCup' | 'whiteboard') => void) | null>(null);
   const timeModeTriggerRef = useRef<((mode: TimeOfDayMode) => void) | null>(null);
-  const updateWhiteboardTriggerRef = useRef<((plan: string) => void) | null>(null);
+  const updateWhiteboardTriggerRef = useRef<((content: WhiteboardContent) => void) | null>(null);
 
   // Mutable ref for ALL props & callbacks
   const propsRef = useRef({
@@ -128,7 +131,7 @@ export function StudioCanvas({
     guests,
     members,
     activePhase,
-    initialPlan,
+    whiteboard,
     onAgentClick,
     onOpenCommanderDesk,
     onInspectCharacter,
@@ -145,7 +148,7 @@ export function StudioCanvas({
       guests,
       members,
       activePhase,
-      initialPlan,
+      whiteboard,
       onAgentClick,
       onOpenCommanderDesk,
       onInspectCharacter,
@@ -175,12 +178,12 @@ export function StudioCanvas({
     }
   }, [controlledAC]);
 
-  // Sync initialPlan
+  // Redraw the whiteboard when the brief or plan changes
   useEffect(() => {
-    if (initialPlan !== undefined) {
-      updateWhiteboardTriggerRef.current?.(initialPlan);
+    if (whiteboard !== undefined) {
+      updateWhiteboardTriggerRef.current?.(whiteboard);
     }
-  }, [initialPlan]);
+  }, [whiteboard]);
 
   const showToast = useCallback((msg: string) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -317,16 +320,16 @@ export function StudioCanvas({
         const on = roomFeatures.toggleAC();
         showToastRef.current(on ? 'AC Unit ON (70°F)' : 'AC Unit Standby');
       },
-      updateWhiteboardPlan: (plan: string) => {
-        workstationSystem.updateWhiteboardPlan(plan);
+      updateWhiteboardPlan: (content: WhiteboardContent) => {
+        workstationSystem.updateWhiteboardPlan(content);
       },
     });
 
-    updateWhiteboardTriggerRef.current = (plan: string) => {
-      workstationSystem.updateWhiteboardPlan(plan);
+    updateWhiteboardTriggerRef.current = (content: WhiteboardContent) => {
+      workstationSystem.updateWhiteboardPlan(content);
     };
-    if (propsRef.current.initialPlan) {
-      workstationSystem.updateWhiteboardPlan(propsRef.current.initialPlan);
+    if (propsRef.current.whiteboard) {
+      workstationSystem.updateWhiteboardPlan(propsRef.current.whiteboard);
     }
 
     // 10. Stylized 3D Character Models Physically Seated in Chairs at Desks (ALL 6 TEAM MEMBERS!)

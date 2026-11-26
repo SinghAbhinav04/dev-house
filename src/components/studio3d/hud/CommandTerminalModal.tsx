@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import type { OfficeMember } from '@/components/mission/MemberStatCard';
@@ -16,12 +16,16 @@ interface CommandTerminalModalProps {
   onStartPipeline: () => void;
   onStopPipeline: () => void;
   onOpenDirectChat?: (agentId: string) => void;
-  initialTab?: 'team' | 'pipeline' | 'chat' | 'feed';
+  initialTab?: CommandTerminalTab;
   // Slots for embedding existing page controls
   pipelineControlsNode?: React.ReactNode;
   chatNode?: React.ReactNode;
   feedNode?: React.ReactNode;
+  /** The run's ticket board — what "my PC" opens to. */
+  boardNode?: React.ReactNode;
 }
+
+export type CommandTerminalTab = 'board' | 'team' | 'pipeline' | 'chat' | 'feed';
 
 export function CommandTerminalModal({
   isOpen,
@@ -36,8 +40,9 @@ export function CommandTerminalModal({
   pipelineControlsNode,
   chatNode,
   feedNode,
+  boardNode,
 }: CommandTerminalModalProps) {
-  const [activeTab, setActiveTab] = useState<'team' | 'pipeline' | 'chat' | 'feed'>(initialTab);
+  const [activeTab, setActiveTab] = useState<CommandTerminalTab>(initialTab);
   const [prevInitialTab, setPrevInitialTab] = useState(initialTab);
 
   // Sync tab during render if initialTab changes (React-recommended pattern)
@@ -45,6 +50,15 @@ export function CommandTerminalModal({
     setPrevInitialTab(initialTab);
     setActiveTab(initialTab);
   }
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -56,7 +70,7 @@ export function CommandTerminalModal({
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: 16 }}
           transition={{ duration: 0.22, ease: 'easeOut' }}
-          className="relative flex h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-[rgba(244,236,226,0.12)] bg-[#17130f] text-[#f4ece2] shadow-[0_20px_60px_rgba(0,0,0,0.85)]"
+          className={`relative flex h-[88vh] w-full ${activeTab === 'board' ? 'max-w-7xl' : 'max-w-5xl'} flex-col overflow-hidden rounded-2xl border border-[rgba(244,236,226,0.12)] bg-[#17130f] text-[#f4ece2] shadow-[0_20px_60px_rgba(0,0,0,0.85)]`}
         >
           {/* Top Warm Studio Navigation Bar */}
           <div className="flex items-center justify-between border-b border-[rgba(244,236,226,0.08)] bg-[#1e1915]/95 px-5 py-3.5">
@@ -76,6 +90,17 @@ export function CommandTerminalModal({
 
             {/* Navigation Tabs (Warm Studio Theme) */}
             <div className="flex rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#17130f] p-1">
+              <button
+                type="button"
+                onClick={() => setActiveTab('board')}
+                className={`rounded-lg px-3 py-1 text-[11px] font-bold uppercase tracking-wider transition-all ${
+                  activeTab === 'board'
+                    ? 'bg-[#d98b4d] text-[#17130f] shadow-sm'
+                    : 'text-[#8a7a6b] hover:text-[#f4ece2]'
+                }`}
+              >
+                Board
+              </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('team')}
@@ -134,7 +159,14 @@ export function CommandTerminalModal({
           </div>
 
           {/* Modal Body */}
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className={`flex-1 p-5 ${activeTab === 'board' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+            {/* TAB 0: The ticket board */}
+            {activeTab === 'board' && (
+              <div className="h-full">
+                {boardNode ?? <p className="text-sm text-[#8a7a6b]">No board for this run.</p>}
+              </div>
+            )}
+
             {/* TAB 1: Team & Skills Config */}
             {activeTab === 'team' && (
               <div className="space-y-4">
