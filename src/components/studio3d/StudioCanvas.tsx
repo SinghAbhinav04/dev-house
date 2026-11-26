@@ -107,6 +107,7 @@ export function StudioCanvas({
   const roomPromptRef = useRef<HTMLDivElement>(null);
   const roomPromptTitleRef = useRef<HTMLSpanElement>(null);
   const roomPromptSubRef = useRef<HTMLSpanElement>(null);
+  const perfRef = useRef<HTMLPreElement>(null);
 
   // Proximity flags for key bindings
   const nearCmdRef = useRef(false);
@@ -643,9 +644,17 @@ export function StudioCanvas({
     let animFrameId: number;
     let lastTime = performance.now();
     let prevCaffeineFloor = -1;
+    let cutawayOn = false;
+
+    // ?perf=1 — frame cost, draw calls and lights, for checking changes here.
+    // CPU time is measured inside the loop, so it stays honest even when the
+    // browser throttles rAF for an occluded window.
+    const perfEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('perf');
+    const perfStats = { frames: 0, cpuMs: 0, renderMs: 0, worstMs: 0, lastReport: 0 };
 
     const renderLoop = (timeNow: number) => {
       animFrameId = requestAnimationFrame(renderLoop);
+      const frameStart = perfEnabled ? performance.now() : 0;
       const delta = Math.min((timeNow - lastTime) / 1000, 0.05);
       lastTime = timeNow;
       const timeSec = timeNow / 1000;
@@ -658,6 +667,13 @@ export function StudioCanvas({
 
       // Exterior Scenery is always resident in GPU memory to eliminate runtime allocation freezes
       scenery.update(delta, dayNightCycle.isNight);
+      // Zoomed in on the studio: cut the building shell away. Zoomed out to
+      // the city: show it whole. Hysteresis so a scroll at the edge does not flicker.
+      const wantCutaway = cutawayOn ? camDist < 30 : camDist < 26;
+      if (wantCutaway !== cutawayOn) {
+        cutawayOn = wantCutaway;
+        scenery.setCutaway(cutawayOn);
+      }
 
       // Update cosmic environment & cozy props & interactive room features
       starfield.update(delta);
@@ -818,8 +834,10 @@ export function StudioCanvas({
       const nearCmd = activeFloor === 2 && distToCmd < 2.5;
       nearCmdRef.current = nearCmd;
 
+      // In-world prompts only while the camera is inside the cutaway; from the
+      // street they would float over the outside of the building.
       if (cmdDeskPromptRef.current) {
-        if (nearCmd) {
+        if (nearCmd && cutawayOn) {
           _scratchScreenProj.copy(workstationSystem.commanderDeskPos).setY(playerPos.y + 1.8).project(cameraRig.camera);
           if (_scratchScreenProj.z < 1.0) {
             const sx = ((_scratchScreenProj.x + 1) / 2) * width;
@@ -903,7 +921,7 @@ export function StudioCanvas({
       nearRoomFeatureRef.current = nearestFeature;
 
       if (roomPromptRef.current) {
-        if (nearestFeature && featureScreenPos) {
+        if (nearestFeature && featureScreenPos && cutawayOn) {
           roomPromptRef.current.style.display = 'block';
           roomPromptRef.current.style.transform = `translate3d(${featureScreenPos.x}px, ${featureScreenPos.y}px, 0)`;
           if (roomPromptTitleRef.current) roomPromptTitleRef.current.textContent = featureTitle;
@@ -949,7 +967,7 @@ export function StudioCanvas({
         if (t.screenPosition) {
           targetAgentIdRef.current = t.agentId;
           if (targetPromptRef.current) {
-            targetPromptRef.current.style.display = 'block';
+            targetPromptRef.current.style.display = cutawayOn ? 'block' : 'none';
             targetPromptRef.current.style.transform = `translate3d(${t.screenPosition.x}px, ${t.screenPosition.y}px, 0)`;
             if (targetNameRef.current) targetNameRef.current.textContent = t.name;
             if (targetRoleRef.current) targetRoleRef.current.textContent = t.role;
@@ -963,20 +981,72 @@ export function StudioCanvas({
       }
 
       // Render Three.js frame
+      const renderStart = perfEnabled ? performance.now() : 0;
       renderer.render(scene, cameraRig.camera);
+
+      if (perfEnabled) {
+        const end = performance.now();
+        perfStats.frames += 1;
+        perfStats.cpuMs += end - frameStart;
+        perfStats.renderMs += end - renderStart;
+        perfStats.worstMs = Math.max(perfStats.worstMs, end - frameStart);
+        if (end - perfStats.lastReport > 1000 && perfRef.current) {
+          let lights = 0;
+          scene.traverseVisible((o) => {
+            if ((o as THREE.Light).isLight) lights += 1;
+          });
+          const n = perfStats.frames || 1;
+          const elapsed = (end - perfStats.lastReport) / 1000;
+          perfRef.current.textContent = [
+            `${(perfStats.frames / elapsed).toFixed(0)} fps`,
+            `cpu ${(perfStats.cpuMs / n).toFixed(1)}ms (render ${(perfStats.renderMs / n).toFixed(1)}) worst ${perfStats.worstMs.toFixed(0)}ms`,
+            `calls ${renderer.info.render.calls} tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k`,
+            `lights ${lights} programs ${renderer.info.programs?.length ?? 0} tex ${renderer.info.memory.textures}`,
+          ].join('\n');
+          (window as unknown as { __studioPerf?: unknown }).__studioPerf = {
+            fps: perfStats.frames / elapsed,
+            cpuMs: perfStats.cpuMs / n,
+            renderMs: perfStats.renderMs / n,
+            worstMs: perfStats.worstMs,
+            calls: renderer.info.render.calls,
+            triangles: renderer.info.render.triangles,
+            lights,
+            programs: renderer.info.programs?.length ?? 0,
+          };
+          perfStats.frames = 0;
+          perfStats.cpuMs = 0;
+          perfStats.renderMs = 0;
+          perfStats.worstMs = 0;
+          perfStats.lastReport = end;
+        }
+      }
     };
 
-    // Precompile all shaders at startup for both indoor studio AND far exterior city views
+    // Warm the GPU for every floor before the first frame.
+    //
+    // A shader program is keyed by the lights in view, and each floor shows a
+    // different set (desk lamps on 2F, the work light on 3F, …). compile() only
+    // sees the lights of the floor currently shown, so the first elevator ride
+    // to 1F or 3F used to recompile every material in the scene on the spot: a
+    // measured 6.4 s freeze. Compile each floor's light set once, here, without
+    // blocking (KHR_parallel_shader_compile), and upload every texture too.
+    for (const floor of [1, 3]) {
+      architecture.setActiveFloor(floor);
+      workstationSystem.setActiveFloor(floor);
+      void renderer.compileAsync(scene, cameraRig.camera).catch(() => {});
+    }
+    architecture.setActiveFloor(activeFloor);
+    workstationSystem.setActiveFloor(activeFloor);
     renderer.compile(scene, cameraRig.camera);
-
-    // Warm up the far zoom-out vantage point in the GPU cache (zero runtime compilation stutter)
-    const initCamPos = cameraRig.camera.position.clone();
-    cameraRig.camera.position.set(0, 32, 42);
-    cameraRig.camera.lookAt(0, 0, 0);
-    cameraRig.camera.updateMatrixWorld();
-    renderer.compile(scene, cameraRig.camera);
-    cameraRig.camera.position.copy(initCamPos);
-    cameraRig.camera.updateMatrixWorld();
+    scene.traverse((object) => {
+      const material = (object as THREE.Mesh).material;
+      if (!material) return;
+      for (const m of Array.isArray(material) ? material : [material]) {
+        for (const value of Object.values(m)) {
+          if ((value as THREE.Texture | null)?.isTexture) renderer.initTexture(value as THREE.Texture);
+        }
+      }
+    });
 
     animFrameId = requestAnimationFrame(renderLoop);
 
@@ -1013,6 +1083,10 @@ export function StudioCanvas({
   return (
     <div ref={containerRef} className="relative h-full w-full select-none overflow-hidden bg-[#0a0807]">
       <canvas ref={canvasRef} className="h-full w-full cursor-grab active:cursor-grabbing" />
+      <pre
+        ref={perfRef}
+        className="pointer-events-none absolute right-3 top-14 z-50 whitespace-pre rounded-md bg-black/70 px-2 py-1 font-mono text-[10px] leading-4 text-[#8fae60] empty:hidden"
+      />
 
       {/* Floating Toast Notification Banner */}
       {toastMessage && (

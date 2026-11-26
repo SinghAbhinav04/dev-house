@@ -88,14 +88,12 @@ export function buildCozyProps(textureCache: TextureCache): CozyPropsResult {
   geometries.push(glassTankGeom);
 
   const glassTankMat = textureCache.getMaterial('mat:terrarium_glass', () =>
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: '#cffafe',
       transparent: true,
       opacity: 0.3,
       roughness: 0.05,
       metalness: 0.1,
-      transmission: 0.85,
-      ior: 1.5,
     })
   );
   materials.push(glassTankMat);
@@ -128,10 +126,6 @@ export function buildCozyProps(textureCache: TextureCache): CozyPropsResult {
   flora.position.set(0, 0.72 + 0.22, 0);
   credenzaGroup.add(flora);
 
-  // Subtle interior glow light
-  const terrariumLight = new THREE.PointLight('#34d399', 0.6, 2.5);
-  terrariumLight.position.set(0, 0.72 + 0.3, 0);
-  credenzaGroup.add(terrariumLight);
 
   rootGroup.add(credenzaGroup);
 

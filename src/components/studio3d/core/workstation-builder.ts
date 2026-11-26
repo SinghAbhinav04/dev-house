@@ -14,7 +14,8 @@ export interface WorkstationMeshRefs {
   deskPos: THREE.Vector3;
   monitorScreens: THREE.Mesh[];
   screenTextures: ScreenTextureResult[];
-  deskLight: THREE.PointLight;
+  /** The lamp's glow; brighter while the member works. Emissive, not a light. */
+  deskLight: { intensity: number };
   floorNumber: number;
 }
 
@@ -96,6 +97,8 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
 
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
+  const deskBulbGeom = new THREE.SphereGeometry(0.06, 10, 8);
+  geometries.push(deskBulbGeom);
   const workstations = new Map<SlotId, WorkstationMeshRefs>();
   const obstacles: AABB[] = [];
 
@@ -303,10 +306,22 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
     deskGroup.add(chairGroup);
     deskGroup.userData = { isWorkstation: true, slot: config.slot };
 
-    // Warm Desk Banker Lamp
-    const lamp = new THREE.PointLight('#fef08a', 1.4, 4.5, 1.2);
-    lamp.position.set(0.7, 1.1, -0.2);
-    deskGroup.add(lamp);
+    // Warm desk lamp glow. A glowing bulb rather than a point light: six
+    // extra lights cost every pixel in the room a loop iteration each, for a
+    // 4.5 m pool of light the ceiling already provides.
+    const bulbMat = new THREE.MeshStandardMaterial({ color: '#fef08a', emissive: '#fef08a', emissiveIntensity: 1.4 });
+    materials.push(bulbMat);
+    const bulb = new THREE.Mesh(deskBulbGeom, bulbMat);
+    bulb.position.set(0.7, 1.1, -0.2);
+    deskGroup.add(bulb);
+    const lamp = {
+      get intensity() {
+        return bulbMat.emissiveIntensity;
+      },
+      set intensity(value: number) {
+        bulbMat.emissiveIntensity = value;
+      },
+    };
 
     // Plant & Mug
     const pot = new THREE.Mesh(plantPotGeom, potMat);
@@ -650,7 +665,14 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
   obstacles.push({ minX: -6.82, maxX: -4.38, minZ: -7.38, maxZ: -6.98, label: 'Studio Library Bookcase' });
 
   // --- Active Floor Visibility Filter ---
+  // Lights are never hidden with their floor, only dimmed: a hidden light
+  // changes the scene's light count, and that recompiles every shader.
+  cmdDeskGroup.updateMatrixWorld(true);
+  rootGroup.updateMatrixWorld(true);
+  rootGroup.attach(warmLampLight);
+
   const setActiveFloor = (floorNum: number) => {
+    warmLampLight.intensity = floorNum === 2 ? 1.6 : 0;
     // Floor 2 hosts the entire engineering team!
     workstations.forEach((ws) => {
       ws.group.visible = floorNum === 2;

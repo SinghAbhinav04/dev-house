@@ -5,6 +5,13 @@ export interface ExteriorSceneryResult {
   group: THREE.Group;
   streetLights: THREE.Light[];
   update: (delta: number, isNight: boolean) => void;
+  /**
+   * Dollhouse cutaway: hide the shell around the studio (front glass, upper
+   * floors, slabs, roof) so a close camera sees into the room. The studio is
+   * always built at ground level, so the slab and two storeys above it sit
+   * between any normal camera angle and the team.
+   */
+  setCutaway: (on: boolean) => void;
   dispose: () => void;
 }
 
@@ -182,11 +189,8 @@ export function buildExteriorScenery(textureCache: TextureCache): ExteriorScener
     head.position.set(0, 4.2, 0.3);
     lampGroup.add(head);
 
-    const light = new THREE.PointLight('#fef08a', 0.0, 16, 1.4);
-    light.position.set(0, 4.0, 0.3);
-    light.castShadow = false;
-    lampGroup.add(light);
-    streetLights.push(light);
+    // The lamp head glows; no point light. Each one was evaluated for every
+    // pixel in the scene, day and night, even at intensity 0.
 
     rootGroup.add(lampGroup);
   });
@@ -352,10 +356,7 @@ export function buildExteriorScenery(textureCache: TextureCache): ExteriorScener
     // Headlights
     const headLightsList: THREE.Light[] = [];
     [-0.55, 0.55].forEach((hz) => {
-      const hLight = new THREE.PointLight('#fffbf0', 0.0, 14, 1.8);
-      hLight.position.set(model.length / 2 + 0.1, 0, hz);
-      carGroup.add(hLight);
-      headLightsList.push(hLight);
+      // Bulb only, no point light: see the street lamps.
 
       // Yellow glowing headlight mesh
       const bulbGeom = new THREE.BoxGeometry(0.08, 0.14, 0.2);
@@ -485,23 +486,21 @@ export function buildExteriorScenery(textureCache: TextureCache): ExteriorScener
     new THREE.MeshStandardMaterial({ color: '#2d2722', roughness: 0.85, metalness: 0.1 })
   );
   const clearShowroomGlassMat = textureCache.getMaterial('mat:ext_showroom_glass', () =>
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: '#ffffff',
       transparent: true,
       opacity: 0.25,
       roughness: 0.08,
       metalness: 0.1,
-      transmission: 0.85,
     })
   );
   const frostedUpperGlassMat = textureCache.getMaterial('mat:ext_frosted_glass', () =>
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: '#334155',
       transparent: true,
       opacity: 0.65,
       roughness: 0.45,
       metalness: 0.2,
-      transmission: 0.35,
     })
   );
 
@@ -692,6 +691,20 @@ export function buildExteriorScenery(textureCache: TextureCache): ExteriorScener
 
   rootGroup.add(exteriorFacadeGroup);
 
+  // Meshes only — the canopy lights stay put, since hiding a light changes the
+  // light count and recompiles every shader. Only the plinth, below the
+  // studio floor line, stays.
+  const keepInCutaway = new Set<THREE.Object3D>([plinth]);
+  const cutawayMeshes = exteriorFacadeGroup.children.filter(
+    (child) => (child as THREE.Mesh).isMesh && !keepInCutaway.has(child),
+  );
+  let cutawayOn = false;
+  const setCutaway = (on: boolean) => {
+    if (on === cutawayOn) return;
+    cutawayOn = on;
+    for (const mesh of cutawayMeshes) mesh.visible = !on;
+  };
+
   // --- Animation Update Loop ---
   const update = (delta: number, isNight: boolean) => {
     // 1. Update Cars driving along the road
@@ -763,6 +776,7 @@ export function buildExteriorScenery(textureCache: TextureCache): ExteriorScener
     group: rootGroup,
     streetLights,
     update,
+    setCutaway,
     dispose,
   };
 }

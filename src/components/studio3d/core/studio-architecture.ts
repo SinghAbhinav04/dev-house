@@ -92,14 +92,12 @@ export function buildStudioArchitecture(
   );
 
   const glassMat = textureCache.getMaterial('mat:active_glass', () =>
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: '#ffffff',
       transparent: true,
       opacity: 0.2,
       roughness: 0.08,
       metalness: 0.1,
-      transmission: 0.88,
-      ior: 1.45,
     })
   );
 
@@ -233,7 +231,7 @@ export function buildStudioArchitecture(
     new THREE.MeshStandardMaterial({ color: '#94a3b8', roughness: 0.2, metalness: 0.9 })
   );
   const liftDarkGlassMat = textureCache.getMaterial('mat:lift_vision_glass', () =>
-    new THREE.MeshPhysicalMaterial({
+    new THREE.MeshStandardMaterial({
       color: '#1e293b',
       roughness: 0.1,
       metalness: 0.5,
@@ -429,9 +427,11 @@ export function buildStudioArchitecture(
   });
 
   // Hanging Industrial Yellow Work Lights
-  const workLight = new THREE.PointLight('#fef08a', 2.8, 14.0, 1.2);
+  // Kept outside constructionGroup and dimmed instead of hidden, so the
+  // scene's light count — and with it every shader — is the same on each floor.
+  const workLight = new THREE.PointLight('#fef08a', 0, 14.0, 1.2);
   workLight.position.set(0, 3.2, 0);
-  constructionGroup.add(workLight);
+  rootGroup.add(workLight);
 
   // Large In-Room "COMING SOON" Expansion Suite Banner
   const roomBannerCanvas = document.createElement('canvas');
@@ -531,6 +531,7 @@ export function buildStudioArchitecture(
     ceilingGroup.visible = !isRooftop;
     constructionGroup.visible = isConstruction;
     rooftopGroup.visible = isRooftop;
+    workLight.intensity = isConstruction ? 2.8 : 0;
 
     // Update modern elevator digital indicator
     updateLiftIndicator(floor.floorNumber, floor.name);
