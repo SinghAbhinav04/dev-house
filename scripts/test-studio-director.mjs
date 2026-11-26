@@ -78,12 +78,20 @@ test('bugs filed in review and QA are announced, breakdown tickets are not', () 
   assert.equal(directionsFor(ev('planner', 'ticket_created', 'DH-2 created: Board UI', { phase: 'coding' }), isMember).length, 0);
 });
 
-test('a queue that falls behind keeps only the latest steps', () => {
+test('board updates collapse into the latest one', () => {
   let state = ingest(createDirector(), [], isMember);
   const burst = Array.from({ length: 10 }, (_, i) => ev('planner', 'board_write', `w${i}`));
   state = ingest(state, burst, isMember);
-  assert.equal(state.queues.planner.length, MAX_QUEUE);
-  assert.match(state.queues.planner.at(-1).say, /w9/);
+  assert.equal(state.queues.planner.length, 1);
+  assert.match(state.queues.planner[0].say, /w9/);
+});
+
+test('a queue that falls behind keeps only the latest steps', () => {
+  let state = ingest(createDirector(), [], isMember);
+  const burst = Array.from({ length: 10 }, (_, i) => ev('tester', 'qa_question', `q${i}`, { detail: to('coder') }));
+  state = ingest(state, burst, isMember);
+  assert.equal(state.queues.tester.length, MAX_QUEUE);
+  assert.match(state.queues.tester.at(-1).say, /q9/);
 });
 
 test('speech is clipped', () => {

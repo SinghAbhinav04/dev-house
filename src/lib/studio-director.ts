@@ -87,7 +87,7 @@ export function directionsFor(event: DirectorEvent, isMember: (id: string) => bo
 
   switch (event.type) {
     case 'board_write':
-      return [{ actor, spot: { kind: 'board' }, say: clipSay(event.text), gesture: 'write', holdMs: 4500 }];
+      return [{ actor, spot: { kind: 'board' }, say: clipSay(event.text), gesture: 'write', holdMs: 2500 }];
 
     case 'call_member':
       if (!target || !isMember(target)) return [{ actor, say: clipSay(event.text), holdMs: 1500 }];
@@ -156,7 +156,12 @@ export function ingest(
     fresh.push(key);
     if (firstLook) continue;
     for (const direction of directionsFor(event, isMember)) {
-      const queue = [...(queues[direction.actor] ?? []), direction];
+      const before = queues[direction.actor] ?? [];
+      // A newer board update replaces one still waiting: the planner shows
+      // the latest line instead of replaying every save.
+      const last = before.at(-1);
+      const base = last?.gesture === 'write' && direction.gesture === 'write' ? before.slice(0, -1) : before;
+      const queue = [...base, direction];
       // Fallen behind: keep the latest few, so the room shows what is
       // happening now rather than replaying the last five minutes.
       queues[direction.actor] = queue.length > MAX_QUEUE ? queue.slice(-MAX_QUEUE) : queue;

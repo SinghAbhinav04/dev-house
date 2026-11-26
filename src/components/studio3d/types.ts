@@ -33,15 +33,6 @@ export interface ActiveWorkstationState {
   position: THREE.Vector3;
 }
 
-export interface InteractionTarget {
-  agentId: string;
-  name: string;
-  role: string;
-  slot: SlotId;
-  screenPosition: { x: number; y: number } | null;
-  distance: number;
-}
-
 export interface StudioConfig {
   roomWidth: number;
   roomDepth: number;

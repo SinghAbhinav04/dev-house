@@ -27,7 +27,7 @@ import { resolveAllObstacles } from './math/collision';
 import { buildNavGrid } from './core/nav-grid';
 import { createStudioStage, seatOf, type ActorSeat, type StageView } from './core/agent-actor';
 import { createDirector, ingest, nextDirection, type DirectorEvent, type DirectorState } from '@/lib/studio-director';
-import type { InteractionTarget } from './types';
+import { createLabelLayer, type LabelItem, type ScreenRect } from './core/label-layer';
 
 export interface StudioCanvasProps {
   activePhase: string;
@@ -75,7 +75,8 @@ const ROLE_HAIRSTYLES: Record<SlotId, HairStyle> = {
 
 const ROOM_WIDTH = 18;
 const ROOM_DEPTH = 15;
-const INTERACTION_RADIUS = 3.6;
+/** How close you need to be to a teammate (from where they are now) to talk to them. */
+const INTERACTION_RADIUS = 2.6;
 
 // Spawns on 2F Dev House Engineering Studio (y = 0) in front of Commander Desk ("My Computer")
 const persistentPlayerPos = new THREE.Vector3(0, 0, 1.8);
@@ -109,10 +110,6 @@ export function StudioCanvas({
   const [caffeineRemaining, setCaffeineRemaining] = useState<number>(0);
 
   // Direct DOM refs for in-world 60 FPS overlays (Zero React re-renders in RAF loop!)
-  const cmdDeskPromptRef = useRef<HTMLDivElement>(null);
-  const targetPromptRef = useRef<HTMLDivElement>(null);
-  const targetNameRef = useRef<HTMLSpanElement>(null);
-  const targetRoleRef = useRef<HTMLSpanElement>(null);
   const roomPromptRef = useRef<HTMLDivElement>(null);
   const roomPromptTitleRef = useRef<HTMLSpanElement>(null);
   const roomPromptSubRef = useRef<HTMLSpanElement>(null);
@@ -693,6 +690,14 @@ export function StudioCanvas({
     const _scratchMoveDir = new THREE.Vector3();
     const _scratchToDest = new THREE.Vector3();
     const _scratchDeskPos = new THREE.Vector3();
+    const _scratchPromptAnchor = new THREE.Vector3();
+    const labelLayer = createLabelLayer(container);
+    const labelPool = new Map<SlotId, LabelItem>();
+    const labelItems: LabelItem[] = [];
+    const promptRects: ScreenRect[] = [];
+    let promptText = '';
+    let promptW = 0;
+    let promptH = 0;
     const _scratchScreenProj = new THREE.Vector3();
     const _worldUp = new THREE.Vector3(0, 1, 0);
 
@@ -884,155 +889,116 @@ export function StudioCanvas({
         workstationSystem.updateCommanderScreen(timeSec);
       }
 
-      // --- Proximity to Commander Desk ("My Computer" on 2F) ---
-      const distToCmd = playerPos.distanceTo(workstationSystem.commanderDeskPos);
-      const nearCmd = activeFloor === 2 && distToCmd < 2.5;
-      nearCmdRef.current = nearCmd;
+      // --- One interaction target: the nearest thing within reach. The one
+      // prompt shows exactly what E, or a click on it, will do. ---
+      let pickKind: 'cmd' | 'feature' | 'agent' | null = null;
+      let pickFeature: 'lights' | 'ac' | 'coffeeMachine' | 'coffeeCup' | 'whiteboard' | null = null;
+      let pickAgent: string | null = null;
+      let pickDist = Infinity;
+      let pickTitle = '';
+      let pickSub = '';
+      let pickY = 0;
+      const consider = (
+        kind: 'cmd' | 'feature' | 'agent',
+        dist: number,
+        reach: number,
+        anchor: THREE.Vector3,
+        anchorY: number,
+        title: string,
+        sub: string,
+        feature: typeof pickFeature = null,
+        agent: string | null = null,
+      ) => {
+        if (dist >= reach || dist >= pickDist) return;
+        pickKind = kind;
+        pickDist = dist;
+        pickFeature = feature;
+        pickAgent = agent;
+        pickTitle = title;
+        pickSub = sub;
+        _scratchPromptAnchor.copy(anchor);
+        pickY = anchorY;
+      };
 
-      // In-world prompts only while the camera is inside the cutaway; from the
-      // street they would float over the outside of the building.
-      if (cmdDeskPromptRef.current) {
-        if (nearCmd && cutawayOn) {
-          _scratchScreenProj.copy(workstationSystem.commanderDeskPos).setY(playerPos.y + 1.8).project(cameraRig.camera);
+      if (activeFloor === 2) {
+        consider('cmd', playerPos.distanceTo(workstationSystem.commanderDeskPos), 2.5, workstationSystem.commanderDeskPos, 1.8, 'Open My Computer', 'Ticket board · team · pipeline');
+        consider('feature', playerPos.distanceTo(workstationSystem.whiteboardPos), 2.8, workstationSystem.whiteboardPos, 1.9, 'Studio Whiteboard', 'Write the brief · see the plan', 'whiteboard');
+      }
+      if (roomFeatures.hasBrewedCup) {
+        consider('feature', playerPos.distanceTo(roomFeatures.coffeePos), 2.5, roomFeatures.coffeePos, 1.2, 'Drink Fresh Espresso', '+40% Sprint Boost (45s)', 'coffeeCup');
+      } else {
+        consider('feature', playerPos.distanceTo(roomFeatures.coffeePos), 2.5, roomFeatures.coffeePos, 1.2, 'Brew Artisan Espresso', 'Fresh Ground Roast', 'coffeeMachine');
+      }
+      consider('feature', playerPos.distanceTo(roomFeatures.switchPos), 2.4, roomFeatures.switchPos, 1.4,
+        roomFeatures.isLightsOn ? 'Turn Off Lights' : 'Turn On Lights',
+        roomFeatures.isLightsOn ? 'Switch to Cozy Mood Mode' : 'Switch to Studio Lighting', 'lights');
+      consider('feature', playerPos.distanceTo(roomFeatures.acPos), 2.6, roomFeatures.acPos, 2.0,
+        roomFeatures.isACOn ? 'Turn Off AC' : 'Turn On AC',
+        roomFeatures.isACOn ? 'Cool Airflow Active (70°F)' : 'Standby Mode', 'ac');
+
+      // Teammates, measured from where they are now (desk or not), and the
+      // labels over their heads.
+      labelItems.length = 0;
+      if (activeFloor === 2) {
+        for (const config of WORKSTATION_CONFIGS) {
+          const view = stage.view(config.slot);
+          const occupant = currentProps.seats[config.slot];
+          if (!view || !occupant) continue;
+          const member = currentProps.members.find((m) => m.id === occupant.agentId);
+          const name = member?.name || occupant.name || config.label;
+          const headY = view.seated ? 1.55 : 1.95;
+          _scratchDeskPos.set(view.x, 0, view.z);
+          consider('agent', Math.hypot(playerPos.x - view.x, playerPos.z - view.z), INTERACTION_RADIUS, _scratchDeskPos, headY + 0.35,
+            `Talk to ${name}`, view.seated ? SLOT_LABELS[config.slot] || config.label : view.activity, null, occupant.agentId);
+          let item = labelPool.get(config.slot);
+          if (!item) {
+            item = { key: config.slot, name, color: '#d98b4d', say: null, x: 0, y: 0, z: 0 };
+            labelPool.set(config.slot, item);
+          }
+          item.name = name;
+          item.color = occupant.color || member?.color || '#d98b4d';
+          item.say = view.say;
+          item.x = view.x;
+          item.y = headY;
+          item.z = view.z;
+          labelItems.push(item);
+        }
+      }
+
+      nearCmdRef.current = pickKind === 'cmd';
+      nearRoomFeatureRef.current = pickKind === 'feature' ? pickFeature : null;
+      targetAgentIdRef.current = pickKind === 'agent' ? pickAgent : null;
+
+      promptRects.length = 0;
+      const prompt = roomPromptRef.current;
+      if (prompt) {
+        let shown = false;
+        if (pickKind && cutawayOn) {
+          _scratchScreenProj.copy(_scratchPromptAnchor).setY(playerPos.y + pickY).project(cameraRig.camera);
           if (_scratchScreenProj.z < 1.0) {
             const sx = ((_scratchScreenProj.x + 1) / 2) * width;
             const sy = ((-_scratchScreenProj.y + 1) / 2) * height;
-            cmdDeskPromptRef.current.style.display = 'block';
-            cmdDeskPromptRef.current.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
-          } else {
-            cmdDeskPromptRef.current.style.display = 'none';
-          }
-        } else {
-          cmdDeskPromptRef.current.style.display = 'none';
-        }
-      }
-
-      // --- Proximity to Interactive Room Features (Lights, AC, Espresso Bar, Whiteboard) ---
-      let nearestFeature: 'lights' | 'ac' | 'coffeeMachine' | 'coffeeCup' | 'whiteboard' | null = null;
-      let featureScreenPos: { x: number; y: number } | null = null;
-      let featureTitle = '';
-      let featureSub = '';
-
-      const distToSwitch = playerPos.distanceTo(roomFeatures.switchPos);
-      const distToAC = playerPos.distanceTo(roomFeatures.acPos);
-      const distToCoffee = playerPos.distanceTo(roomFeatures.coffeePos);
-
-      if (distToCoffee < 2.5) {
-        _scratchScreenProj.copy(roomFeatures.coffeePos).setY(playerPos.y + 1.2).project(cameraRig.camera);
-        if (_scratchScreenProj.z < 1.0) {
-          featureScreenPos = {
-            x: ((_scratchScreenProj.x + 1) / 2) * width,
-            y: ((-_scratchScreenProj.y + 1) / 2) * height,
-          };
-          if (roomFeatures.hasBrewedCup) {
-            nearestFeature = 'coffeeCup';
-            featureTitle = 'Drink Fresh Espresso';
-            featureSub = '+40% Sprint Boost (45s)';
-          } else {
-            nearestFeature = 'coffeeMachine';
-            featureTitle = 'Brew Artisan Espresso';
-            featureSub = 'Fresh Ground Roast';
+            if (promptText !== pickTitle + pickSub) {
+              promptText = pickTitle + pickSub;
+              if (roomPromptTitleRef.current) roomPromptTitleRef.current.textContent = pickTitle;
+              if (roomPromptSubRef.current) roomPromptSubRef.current.textContent = pickSub;
+              prompt.style.display = 'block';
+              promptW = prompt.offsetWidth;
+              promptH = prompt.offsetHeight;
+            }
+            prompt.style.display = 'block';
+            prompt.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+            promptRects.push({ left: sx - promptW / 2 - 4, top: sy - promptH - 4, right: sx + promptW / 2 + 4, bottom: sy + 4 });
+            shown = true;
           }
         }
-      } else if (distToSwitch < 2.4) {
-        _scratchScreenProj.copy(roomFeatures.switchPos).setY(playerPos.y + 1.4).project(cameraRig.camera);
-        if (_scratchScreenProj.z < 1.0) {
-          featureScreenPos = {
-            x: ((_scratchScreenProj.x + 1) / 2) * width,
-            y: ((-_scratchScreenProj.y + 1) / 2) * height,
-          };
-          nearestFeature = 'lights';
-          featureTitle = roomFeatures.isLightsOn ? 'Turn Off Lights' : 'Turn On Lights';
-          featureSub = roomFeatures.isLightsOn ? 'Switch to Cozy Mood Mode' : 'Switch to Studio Lighting';
-        }
-      } else if (distToAC < 2.6) {
-        _scratchScreenProj.copy(roomFeatures.acPos).setY(playerPos.y + 2.0).project(cameraRig.camera);
-        if (_scratchScreenProj.z < 1.0) {
-          featureScreenPos = {
-            x: ((_scratchScreenProj.x + 1) / 2) * width,
-            y: ((-_scratchScreenProj.y + 1) / 2) * height,
-          };
-          nearestFeature = 'ac';
-          featureTitle = roomFeatures.isACOn ? 'Turn Off AC' : 'Turn On AC';
-          featureSub = roomFeatures.isACOn ? 'Cool Airflow Active (70°F)' : 'Standby Mode';
-        }
+        if (!shown) prompt.style.display = 'none';
       }
 
-      // Proximity to Architecture Whiteboard on Floor 2
-      const distToWhiteboard = playerPos.distanceTo(workstationSystem.whiteboardPos);
-      if (activeFloor === 2 && distToWhiteboard < 2.8) {
-        _scratchScreenProj.copy(workstationSystem.whiteboardPos).setY(playerPos.y + 1.4).project(cameraRig.camera);
-        if (_scratchScreenProj.z < 1.0) {
-          featureScreenPos = {
-            x: ((_scratchScreenProj.x + 1) / 2) * width,
-            y: ((-_scratchScreenProj.y + 1) / 2) * height,
-          };
-          nearestFeature = 'whiteboard';
-          featureTitle = 'Architecture Whiteboard';
-          featureSub = 'Press E or Click to View & Edit Plan';
-        }
-      }
-
-      nearRoomFeatureRef.current = nearestFeature;
-
-      if (roomPromptRef.current) {
-        if (nearestFeature && featureScreenPos && cutawayOn) {
-          roomPromptRef.current.style.display = 'block';
-          roomPromptRef.current.style.transform = `translate3d(${featureScreenPos.x}px, ${featureScreenPos.y}px, 0)`;
-          if (roomPromptTitleRef.current) roomPromptTitleRef.current.textContent = featureTitle;
-          if (roomPromptSubRef.current) roomPromptSubRef.current.textContent = featureSub;
-        } else {
-          roomPromptRef.current.style.display = 'none';
-        }
-      }
-
-      // --- Proximity to Team Desks on Current Floor ---
-      let nearestTarget: InteractionTarget | null = null;
-      let minDistance = INTERACTION_RADIUS; // Extended radius for intuitive proximity interaction
-
-      WORKSTATION_CONFIGS.forEach((config) => {
-        if (config.floorNumber !== activeFloor) return;
-        const seatOccupant = currentProps.seats[config.slot];
-        const member = currentProps.members.find(
-          (m) => m.id === seatOccupant?.agentId || m.id.toLowerCase() === config.slot.toLowerCase()
-        );
-        _scratchDeskPos.set(config.position[0], config.position[1], config.position[2]);
-        const dist = playerPos.distanceTo(_scratchDeskPos);
-
-        _scratchScreenProj.copy(_scratchDeskPos).setY(config.position[1] + 1.6).project(cameraRig.camera);
-        const screenX = ((_scratchScreenProj.x + 1) / 2) * width;
-        const screenY = ((-_scratchScreenProj.y + 1) / 2) * height;
-        const isInFront = _scratchScreenProj.z < 1.0;
-
-        if (dist < minDistance && isInFront) {
-          minDistance = dist;
-          nearestTarget = {
-            agentId: seatOccupant?.agentId || member?.id || config.slot,
-            name: seatOccupant?.name || member?.name || config.label,
-            role: SLOT_LABELS[config.slot] || config.label,
-            slot: config.slot,
-            distance: dist,
-            screenPosition: { x: screenX, y: screenY },
-          };
-        }
-      });
-
-      if (nearestTarget) {
-        const t = nearestTarget as InteractionTarget;
-        if (t.screenPosition) {
-          targetAgentIdRef.current = t.agentId;
-          if (targetPromptRef.current) {
-            targetPromptRef.current.style.display = cutawayOn ? 'block' : 'none';
-            targetPromptRef.current.style.transform = `translate3d(${t.screenPosition.x}px, ${t.screenPosition.y}px, 0)`;
-            if (targetNameRef.current) targetNameRef.current.textContent = t.name;
-            if (targetRoleRef.current) targetRoleRef.current.textContent = t.role;
-          }
-        }
+      if (cutawayOn && activeFloor === 2) {
+        labelLayer.update(cameraRig.camera, width, height, labelItems, promptRects);
       } else {
-        targetAgentIdRef.current = null;
-        if (targetPromptRef.current) {
-          targetPromptRef.current.style.display = 'none';
-        }
+        labelLayer.hideAll();
       }
 
       // Render Three.js frame
@@ -1124,6 +1090,7 @@ export function StudioCanvas({
       scenery.dispose();
       dayNightCycle.dispose();
       cozyProps.dispose();
+      labelLayer.dispose();
       devCharacters.forEach((c) => c.dispose());
       playerChar.dispose();
       cameraRig.dispose();
@@ -1168,36 +1135,14 @@ export function StudioCanvas({
         </div>
       )}
 
-      {/* In-World Proximity Interact Prompt for Team Members (Zero React Re-render, Direct Transform) */}
-      <div
-        ref={targetPromptRef}
-        className="pointer-events-auto absolute left-0 top-0 z-40 -translate-x-1/2 -translate-y-full cursor-pointer hidden"
-        onClick={() => {
-          if (targetAgentIdRef.current) handleInteract(targetAgentIdRef.current);
-        }}
-      >
-        <div className="flex items-center gap-2 rounded-xl border border-[rgba(244,236,226,0.15)] bg-[#17130f]/95 px-3 py-1.5 shadow-xl backdrop-blur-md transition-transform hover:scale-105 active:scale-95">
-          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-[#d98b4d] font-mono text-[10px] font-bold text-[#17130f] shadow-sm">
-            E
-          </span>
-          <div className="flex flex-col">
-            <span ref={targetNameRef} className="text-xs font-bold text-[#f4ece2]">
-              Dev
-            </span>
-            <span ref={targetRoleRef} className="text-[9px] uppercase tracking-wider text-[#8a7a6b]">
-              Workstation
-            </span>
-          </div>
-        </div>
-        <div className="mx-auto h-0 w-0 border-x-4 border-t-4 border-x-transparent border-t-[#17130f]" />
-      </div>
-
-      {/* In-World Proximity Interact Prompt for Room Features (Lights, AC, Espresso Bar) */}
+      {/* The one in-world prompt: exactly what E, or a click here, will act on */}
       <div
         ref={roomPromptRef}
         className="pointer-events-auto absolute left-0 top-0 z-40 -translate-x-1/2 -translate-y-full cursor-pointer hidden"
         onClick={() => {
-          if (nearRoomFeatureRef.current) featureActionTriggerRef.current?.(nearRoomFeatureRef.current);
+          if (nearCmdRef.current) propsRef.current.onOpenCommanderDesk?.();
+          else if (nearRoomFeatureRef.current) featureActionTriggerRef.current?.(nearRoomFeatureRef.current);
+          else if (targetAgentIdRef.current) handleInteract(targetAgentIdRef.current);
         }}
       >
         <div className="flex items-center gap-2 rounded-xl border border-[#d98b4d] bg-[#17130f]/95 px-3.5 py-1.5 shadow-xl backdrop-blur-md transition-transform hover:scale-105 active:scale-95">
@@ -1210,28 +1155,6 @@ export function StudioCanvas({
             </span>
             <span ref={roomPromptSubRef} className="text-[9px] uppercase tracking-wider text-[#8a7a6b]">
               Action
-            </span>
-          </div>
-        </div>
-        <div className="mx-auto h-0 w-0 border-x-4 border-t-4 border-x-transparent border-t-[#d98b4d]" />
-      </div>
-
-      {/* Commander Desk ("My Computer") Holographic Prompt (Zero React Re-render, Direct Transform) */}
-      <div
-        ref={cmdDeskPromptRef}
-        className="pointer-events-auto absolute left-0 top-0 z-40 -translate-x-1/2 -translate-y-full cursor-pointer hidden"
-        onClick={() => propsRef.current.onOpenCommanderDesk?.()}
-      >
-        <div className="flex items-center gap-2.5 rounded-xl border border-[#d98b4d] bg-[#17130f]/95 px-4 py-2 shadow-[0_10px_30px_rgba(0,0,0,0.8)] backdrop-blur-md transition-transform hover:scale-105 active:scale-95">
-          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-[#d98b4d] font-mono text-[10px] font-bold text-[#17130f] shadow-sm">
-            E
-          </span>
-          <div className="flex flex-col">
-            <span className="text-[12px] font-bold text-[#f4ece2]">
-              Open <span className="text-[#d98b4d]">My Computer (Lead Workspace)</span>
-            </span>
-            <span className="text-[9px] uppercase tracking-wider text-[#8a7a6b]">
-              Team Roster • Skills Config • Pipeline Controls
             </span>
           </div>
         </div>
