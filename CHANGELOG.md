@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- **A "more below" arrow on every scrolling pane.** A pane with content below
+  its fold, the page included, now shows a round down-arrow at its bottom. One
+  click scrolls that pane to the end, and the arrow goes away once nothing is
+  left below. The Start button and the chat box could both sit below a fold
+  with nothing on screen saying so.
+
 ### Security
 
 All four fixes below were reported and contributed by Julius Smith
