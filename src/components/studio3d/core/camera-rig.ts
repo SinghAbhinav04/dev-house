@@ -16,7 +16,25 @@ export interface CameraRigResult {
   attachDomEvents: (domElement: HTMLElement, onCanvasClick?: (e: MouseEvent) => void) => () => void;
   zoom: (deltaY: number) => void;
   getDistance: () => number;
+  /** Take the camera for a scripted move (recording); null hands it back. */
+  setShot: (shot: CameraShot | null) => void;
   dispose: () => void;
+}
+
+/**
+ * A scripted camera move: glide (eased) to this framing over `seconds`, then
+ * hold it, keeping `focus()` (or the player, when it returns null) in frame.
+ */
+export interface CameraShot {
+  distance: number;
+  yaw: number;
+  pitch: number;
+  seconds: number;
+  /** Height of the look-at point above the focus. Default 1.2. */
+  lift?: number;
+  /** A slow orbit (radians per second) that keeps going once the glide lands. */
+  drift?: number;
+  focus?: () => THREE.Vector3 | null;
 }
 
 /**
@@ -57,7 +75,64 @@ export function createCameraRig(options: CameraRigOptions = {}): CameraRigResult
    * Smoothly updates camera position and look-at target with spring damping.
    * Includes micro-jitter deadzones to prevent front-to-back camera shake.
    */
+  let shot: CameraShot | null = null;
+  let shotT = 0;
+  let shotAge = 0;
+  const shotFrom = { distance: 0, yaw: 0, pitch: 0, look: new THREE.Vector3() };
+  const shotLook = new THREE.Vector3();
+  const smooth = (k: number) => k * k * k * (k * (k * 6 - 15) + 10); // smootherstep
+
+  const setShot = (next: CameraShot | null) => {
+    if (!next) {
+      // Hand back without a jump: the follow camera starts from here.
+      if (shot) {
+        targetDistance = Math.max(minDistance, Math.min(maxDistance, distance));
+        targetYaw = yawAngle;
+        targetPitch = Math.max(minPitch, Math.min(maxPitch, pitchAngle));
+      }
+      shot = null;
+      return;
+    }
+    shot = next;
+    shotT = 0;
+    shotAge = 0;
+    shotFrom.distance = distance;
+    shotFrom.yaw = yawAngle;
+    shotFrom.pitch = pitchAngle;
+    shotFrom.look.copy(currentLookAt);
+  };
+
+  const updateShot = (active: CameraShot, targetPos: THREE.Vector3, delta: number) => {
+    shotT = Math.min(1, shotT + delta / Math.max(0.001, active.seconds));
+    shotAge += delta;
+    const k = smooth(shotT);
+    distance = THREE.MathUtils.lerp(shotFrom.distance, active.distance, k);
+    // The drift ramps in with the glide, so the move never jerks.
+    yawAngle = THREE.MathUtils.lerp(shotFrom.yaw, active.yaw, k) + (active.drift ?? 0) * shotAge * k;
+    pitchAngle = THREE.MathUtils.lerp(shotFrom.pitch, active.pitch, k);
+    const focus = active.focus?.() ?? targetPos;
+    shotLook.set(focus.x, focus.y + (active.lift ?? 1.2), focus.z);
+    if (shotT < 1) {
+      currentLookAt.lerpVectors(shotFrom.look, shotLook, k);
+      // A moving subject keeps pulling the start along, so the glide lands on it.
+      shotFrom.look.lerp(shotLook, Math.min(1, delta * 1.5));
+    } else {
+      currentLookAt.lerp(shotLook, 1 - Math.exp(-delta * 2.5));
+    }
+  };
+
   const update = (targetPos: THREE.Vector3, delta: number) => {
+    if (shot) {
+      updateShot(shot, targetPos, delta);
+      const h = distance * Math.cos(pitchAngle);
+      camera.position.set(
+        currentLookAt.x + h * Math.sin(yawAngle),
+        currentLookAt.y + distance * Math.sin(pitchAngle),
+        currentLookAt.z + h * Math.cos(yawAngle),
+      );
+      camera.lookAt(currentLookAt);
+      return;
+    }
     // 1. Lerp distance and orbital angles smoothly with epsilon lock
     if (Math.abs(distance - targetDistance) < 0.002) {
       distance = targetDistance;
@@ -220,6 +295,7 @@ export function createCameraRig(options: CameraRigOptions = {}): CameraRigResult
     attachDomEvents,
     zoom,
     getDistance: () => distance,
+    setShot,
     dispose,
   };
 }

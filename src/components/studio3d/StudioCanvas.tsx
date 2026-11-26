@@ -668,6 +668,53 @@ export function StudioCanvas({
     // Attach Camera Mouse Events (smooth right-drag orbit + left-click navigation)
     const detachDomEvents = cameraRig.attachDomEvents(canvas, onPointerClick);
 
+    // ?cinema=1: a scripted camera for recording product footage. The shot
+    // tracks a named subject (a teammate's slot, the whiteboard, the player).
+    const cinemaEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('cinema');
+    type CinemaName = 'player' | 'whiteboard' | 'commander' | SlotId;
+    type CinemaFocus = CinemaName | [number, number, number] | { between: [CinemaName, CinemaName] };
+    const cinemaFocus = new THREE.Vector3();
+    const cinemaA = new THREE.Vector3();
+    const cinemaB = new THREE.Vector3();
+    const resolveCinema = (name: CinemaName, into: THREE.Vector3): THREE.Vector3 => {
+      if (name === 'player') return into.copy(playerPos);
+      if (name === 'whiteboard') return into.copy(workstationSystem.whiteboardPos);
+      if (name === 'commander') return into.copy(workstationSystem.commanderDeskPos);
+      const view = stage.view(name);
+      return view ? into.set(view.x, 0, view.z) : into.copy(playerPos);
+    };
+    if (cinemaEnabled) {
+      (window as unknown as { __studioCam?: unknown }).__studioCam = {
+        shot(o: { focus?: CinemaFocus; distance: number; yaw: number; pitch: number; seconds: number; lift?: number; drift?: number }) {
+          const focus = o.focus ?? 'player';
+          cameraRig.setShot({
+            distance: o.distance, yaw: o.yaw, pitch: o.pitch, seconds: o.seconds, lift: o.lift, drift: o.drift,
+            focus: () => {
+              if (focus === 'player') return null;
+              if (Array.isArray(focus)) return cinemaFocus.set(focus[0], focus[1], focus[2]);
+              if (typeof focus === 'object') {
+                resolveCinema(focus.between[0], cinemaA);
+                resolveCinema(focus.between[1], cinemaB);
+                return cinemaFocus.lerpVectors(cinemaA, cinemaB, 0.5);
+              }
+              return resolveCinema(focus, cinemaFocus);
+            },
+          });
+        },
+        places: () => ({
+          whiteboard: { x: workstationSystem.whiteboardPos.x, z: workstationSystem.whiteboardPos.z },
+          commander: { x: workstationSystem.commanderDeskPos.x, z: workstationSystem.commanderDeskPos.z },
+        }),
+        release: () => cameraRig.setShot(null),
+        view: (slot: SlotId) => stage.view(slot) ?? null,
+        player: () => ({ x: playerPos.x, z: playerPos.z }),
+        walkTo: (x: number, z: number) => {
+          clickDestination = new THREE.Vector3(x, playerPos.y, z);
+        },
+        roomBounds: () => ({ ...roomBounds }),
+      };
+    }
+
     // Scratch math vectors (Zero-allocation RAF loop - 0B/s GC pressure on low-spec CPUs!)
     const _scratchCamForward = new THREE.Vector3();
     const _scratchCamRight = new THREE.Vector3();
@@ -1062,6 +1109,7 @@ export function StudioCanvas({
       cancelAnimationFrame(animFrameId);
       resizeObserver.disconnect();
       detachDomEvents();
+      if (cinemaEnabled) delete (window as unknown as { __studioCam?: unknown }).__studioCam;
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
