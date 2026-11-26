@@ -48,6 +48,11 @@ export interface StudioCanvasProps {
   /** The run's tickets, drawn on the commander desk's screen; and the run's title. */
   tickets?: readonly Ticket[];
   boardTitle?: string;
+  /**
+   * A modal is open over the studio: keys go to the modal, not the player,
+   * and the scene behind it redraws at a few frames a second.
+   */
+  paused?: boolean;
   onAgentClick?: (agentId: string) => void;
   onOpenCommanderDesk?: () => void;
   /** A teammate (or an empty desk: member null) was clicked or interacted with. */
@@ -102,6 +107,7 @@ export function StudioCanvas({
   events,
   tickets,
   boardTitle,
+  paused = false,
   onAgentClick,
   onOpenCommanderDesk,
   onInspectCharacter,
@@ -150,6 +156,7 @@ export function StudioCanvas({
     members,
     activePhase,
     whiteboard,
+    paused,
     onAgentClick,
     onOpenCommanderDesk,
     onInspectCharacter,
@@ -167,6 +174,7 @@ export function StudioCanvas({
       members,
       activePhase,
       whiteboard,
+      paused,
       onAgentClick,
       onOpenCommanderDesk,
       onInspectCharacter,
@@ -279,7 +287,8 @@ export function StudioCanvas({
       alpha: true,
     });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const maxDpr = Math.min(window.devicePixelRatio, 2);
+    renderer.setPixelRatio(maxDpr);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -522,6 +531,7 @@ export function StudioCanvas({
     // Keyboard controls with Sprint modifier and Floor numbers 1-3
     const keys = { up: false, down: false, left: false, right: false, sprint: false };
     const onKeyDown = (e: KeyboardEvent) => {
+      if (propsRef.current.paused) return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
 
@@ -715,9 +725,59 @@ export function StudioCanvas({
     const perfEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('perf');
     const perfStats = { frames: 0, cpuMs: 0, renderMs: 0, worstMs: 0, lastReport: 0 };
 
+    // Behind a modal: a few frames a second keeps the room alive for almost
+    // no GPU.
+    const PAUSED_FRAME_MS = 200;
+    let lastPausedFrame = 0;
+    let wasPaused = false;
+
+    // Adaptive resolution: a slow machine steps its pixel ratio down
+    // (2 → 1.5 → 1) after two seconds of long frames, and back up after four
+    // of short ones. Frame intervals, not CPU time, so GPU-bound frames count.
+    const DPR_STEPS = [2, 1.5, 1].filter((d) => d <= maxDpr);
+    if (DPR_STEPS[0] !== maxDpr) DPR_STEPS.unshift(maxDpr);
+    let dprIndex = 0;
+    let slowMs = 0;
+    let fastMs = 0;
+    const adaptDpr = (intervalMs: number) => {
+      // A hidden tab or a hitch from loading is not a slow machine.
+      if (intervalMs > 250) return;
+      if (intervalMs > 20) {
+        slowMs += intervalMs;
+        fastMs = 0;
+      } else if (intervalMs < 12) {
+        fastMs += intervalMs;
+        slowMs = Math.max(0, slowMs - intervalMs);
+      } else {
+        slowMs = Math.max(0, slowMs - intervalMs);
+        fastMs = 0;
+      }
+      if (slowMs > 2000 && dprIndex < DPR_STEPS.length - 1) {
+        dprIndex += 1;
+        renderer.setPixelRatio(DPR_STEPS[dprIndex]);
+        slowMs = 0;
+      } else if (fastMs > 4000 && dprIndex > 0) {
+        dprIndex -= 1;
+        renderer.setPixelRatio(DPR_STEPS[dprIndex]);
+        fastMs = 0;
+      }
+    };
+
     const renderLoop = (timeNow: number) => {
       animFrameId = requestAnimationFrame(renderLoop);
+      const paused = propsRef.current.paused === true;
+      if (paused) {
+        if (!wasPaused) onBlur(); // let go of any held movement key
+        wasPaused = true;
+        if (timeNow - lastPausedFrame < PAUSED_FRAME_MS) return;
+        lastPausedFrame = timeNow;
+      } else if (wasPaused) {
+        wasPaused = false;
+        // Not a slow frame: the loop was resting.
+        lastTime = timeNow;
+      }
       const frameStart = perfEnabled ? performance.now() : 0;
+      if (!paused) adaptDpr(timeNow - lastTime);
       const delta = Math.min((timeNow - lastTime) / 1000, 0.05);
       lastTime = timeNow;
       const timeSec = timeNow / 1000;
@@ -1019,7 +1079,7 @@ export function StudioCanvas({
             `${(perfStats.frames / elapsed).toFixed(0)} fps`,
             `cpu ${(perfStats.cpuMs / n).toFixed(1)}ms (render ${(perfStats.renderMs / n).toFixed(1)}) worst ${perfStats.worstMs.toFixed(0)}ms`,
             `calls ${renderer.info.render.calls} tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k`,
-            `lights ${lights} programs ${renderer.info.programs?.length ?? 0} tex ${renderer.info.memory.textures}`,
+            `lights ${lights} programs ${renderer.info.programs?.length ?? 0} tex ${renderer.info.memory.textures} dpr ${renderer.getPixelRatio()}`,
           ].join('\n');
           (window as unknown as { __studioPerf?: unknown }).__studioPerf = {
             fps: perfStats.frames / elapsed,
@@ -1030,6 +1090,7 @@ export function StudioCanvas({
             triangles: renderer.info.render.triangles,
             lights,
             programs: renderer.info.programs?.length ?? 0,
+            dpr: renderer.getPixelRatio(),
           };
           perfStats.frames = 0;
           perfStats.cpuMs = 0;

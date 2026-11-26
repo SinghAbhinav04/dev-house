@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { markdownForBoard } from '@/lib/markdown-breaks';
 import type { SlotId } from '@/lib/team/types';
 import type { AABB, WorkstationDef } from '../types';
 import type { TextureCache } from './texture-cache';
@@ -529,7 +530,7 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
       wbCtx.lineTo(left + COL_W, TOP);
       wbCtx.stroke();
 
-      const text = (x ?? '').trim();
+      const text = markdownForBoard(x ?? '').trim();
       if (!text) {
         wbCtx.fillStyle = '#94a3b8';
         wbCtx.font = 'italic 15px monospace';

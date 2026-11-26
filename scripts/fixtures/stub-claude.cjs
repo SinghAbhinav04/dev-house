@@ -50,14 +50,15 @@ const teamLines = prompt
   .split('\n')
   .map((line) => /^- (\w+): (.+?) — (.+)$/.exec(line))
   .filter(Boolean)
-  .map(([, slot, who]) => ({ slot, name: who.split(',')[0].trim() }));
+  .map(([, slot, who]) => ({ slot, name: who.split(',')[0].trim() }))
+  .filter((t) => !/^nobody/i.test(t.name));
 const nameFor = (slot, fallback) => (teamLines.find((t) => t.slot === slot) || { name: fallback }).name;
 const TEAM_TABLE = [
   '| Who | Tasks | Estimate | Priority |',
   '|---|---|---|---|',
-  `| ${nameFor('coder', 'Coder')} (coder) | 1. Board columns and cards<br>2. Drag cards between columns | 25m, 20m | P1, P2 |`,
+  `| ${nameFor('coder', 'Coder')} (coder) | DH-2 Board columns and cards; DH-3 Drag cards between columns | 25m, 20m | P1, P2 |`,
   `| ${nameFor('tester', 'Tester')} (tester) | Test plan; asks the coder how to run it, then tests every ticket | 10m | P2 |`,
-  `| ${nameFor('reviewer', 'Reviewer')} (reviewer) | Reviews the plan, then each ticket's branch | — | — |`,
+  ...(teamLines.some((t) => t.slot === 'reviewer') ? [`| ${nameFor('reviewer', 'Reviewer')} (reviewer) | Reviews the plan before any code is written | — | — |`] : []),
   ...(teamLines.some((t) => t.slot === 'auditor') ? [`| ${nameFor('auditor', 'Auditor')} (auditor) | Checks card text is never rendered as HTML | — | — |`] : []),
 ].join('\n');
 

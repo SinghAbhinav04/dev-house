@@ -47,6 +47,7 @@
     "react-markdown": "^10.1.0",
     "recharts": "^3.11.0",
     "remark-breaks": "^4.0.0",
+    "remark-gfm": "4.0.1",
     "three": "^0.187.0",
     "tsx": "^4.20.0"
   },

@@ -243,6 +243,7 @@ export function DevHouseStudio3D({
       {/* Main 3D WebGL Canvas */}
       <div className="relative h-full w-full flex-1">
         <StudioCanvas
+          paused={isWhiteboardOpen || isCommanderOpen || inspector !== null}
           activePhase={activePhase}
           agentStatus={agentStatus}
           latestSpeech={latestSpeech}
