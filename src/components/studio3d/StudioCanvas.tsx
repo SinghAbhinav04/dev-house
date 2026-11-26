@@ -27,6 +27,8 @@ import { resolveAllObstacles } from './math/collision';
 import { buildNavGrid } from './core/nav-grid';
 import { createStudioStage, seatOf, type ActorSeat, type StageView } from './core/agent-actor';
 import { createDirector, ingest, nextDirection, type DirectorEvent, type DirectorState } from '@/lib/studio-director';
+import { BOARD_COLUMNS, ticketsInColumn, type Ticket } from '@/lib/tickets';
+import type { CommanderBoardColumn } from './core/screen-texture-factory';
 import { createLabelLayer, type LabelItem, type ScreenRect } from './core/label-layer';
 
 export interface StudioCanvasProps {
@@ -43,9 +45,13 @@ export interface StudioCanvasProps {
   whiteboard?: WhiteboardContent;
   /** The run's events: hand-offs, board writes and QA turns are acted out in the room. */
   events?: readonly DirectorEvent[];
+  /** The run's tickets, drawn on the commander desk's screen; and the run's title. */
+  tickets?: readonly Ticket[];
+  boardTitle?: string;
   onAgentClick?: (agentId: string) => void;
   onOpenCommanderDesk?: () => void;
-  onInspectCharacter?: (member: OfficeMember, slot?: SlotId, status?: string) => void;
+  /** A teammate (or an empty desk: member null) was clicked or interacted with. */
+  onInspectCharacter?: (member: OfficeMember | null, slot: SlotId, status: string, activity?: string) => void;
   onOpenWhiteboard?: () => void;
   onControlsReady?: (controls: {
     cycleTimeOfDay: () => void;
@@ -94,6 +100,8 @@ export function StudioCanvas({
   isACOn: controlledAC,
   whiteboard,
   events,
+  tickets,
+  boardTitle,
   onAgentClick,
   onOpenCommanderDesk,
   onInspectCharacter,
@@ -125,6 +133,8 @@ export function StudioCanvas({
   const featureActionTriggerRef = useRef<((feature: 'lights' | 'ac' | 'coffeeMachine' | 'coffeeCup' | 'whiteboard') => void) | null>(null);
   const timeModeTriggerRef = useRef<((mode: TimeOfDayMode) => void) | null>(null);
   const updateWhiteboardTriggerRef = useRef<((content: WhiteboardContent) => void) | null>(null);
+  const commanderBoardRef = useRef<((title: string, columns: CommanderBoardColumn[]) => void) | null>(null);
+  const commanderBoardData = useRef<{ title: string; columns: CommanderBoardColumn[] }>({ title: '', columns: [] });
 
   // Stage directions from the run's events, pulled per desk by the render loop.
   const directorRef = useRef<DirectorState>(createDirector());
@@ -164,6 +174,21 @@ export function StudioCanvas({
       onControlsReady,
     };
   });
+
+  // The commander screen shows the board; redrawn only when the tickets change.
+  useEffect(() => {
+    const colorOf = (id: string | null) => members.find((m) => m.id === id)?.color || '#8a7a6b';
+    const columns = BOARD_COLUMNS.map((column) => {
+      const cards = ticketsInColumn(tickets ?? [], column.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      return {
+        label: column.label,
+        count: cards.length,
+        cards: cards.slice(0, 4).map((t) => ({ id: t.id, title: t.title, color: colorOf(t.assignee) })),
+      };
+    });
+    commanderBoardData.current = { title: boardTitle ?? '', columns };
+    commanderBoardRef.current?.(boardTitle ?? '', columns);
+  }, [tickets, boardTitle, members]);
 
   // Turn new events into stage directions (seated teammates only).
   useEffect(() => {
@@ -212,31 +237,25 @@ export function StudioCanvas({
     showToastRef.current = showToast;
   });
 
-  const handleInteract = useCallback((agentId: string) => {
+  /**
+   * Open the inspector for a desk: the same for a click on the character, E,
+   * or the prompt. An empty desk says so rather than inventing a teammate.
+   */
+  const inspectSlot = useCallback((slot: SlotId) => {
     const currentProps = propsRef.current;
-    let occupant = currentProps.members.find((m) => m.id === agentId);
-    const slot = (Object.keys(currentProps.seats) as SlotId[]).find(
-      (s) => currentProps.seats[s]?.agentId === agentId
-    );
-    if (!occupant) {
-      const config = WORKSTATION_CONFIGS.find((c) => c.slot === agentId || c.slot === slot);
-      const slotColor = slot ? (ROLE_COLORS[slot] || '#d98b4d') : '#d98b4d';
-      occupant = {
-        id: agentId,
-        name: config ? config.label : agentId.toUpperCase(),
-        color: slotColor,
-        model: 'gemini-2.5-pro',
-        startedAt: new Date(Date.now() - 3600000).toISOString(),
-        currentTask: 'Active at workstation, standing by for pipeline instructions.',
-        billable: 50500,
-        usage: { totalCostUsd: 0.042 },
-      };
-    }
-    if (occupant) {
-      currentProps.onInspectCharacter?.(occupant, slot, currentProps.agentStatus[agentId] || 'idle');
-    }
-    currentProps.onAgentClick?.(agentId);
+    const occupant = currentProps.seats[slot];
+    const member = occupant ? currentProps.members.find((m) => m.id === occupant.agentId) ?? null : null;
+    const status = occupant ? currentProps.agentStatus[occupant.agentId] || 'idle' : 'idle';
+    const activity = stageViewRef.current(slot)?.activity;
+    currentProps.onInspectCharacter?.(member, slot, status, activity);
+    if (member) currentProps.onAgentClick?.(member.id);
   }, []);
+
+  const handleInteract = useCallback((agentId: string) => {
+    const seatMap = propsRef.current.seats;
+    const slot = (Object.keys(seatMap) as SlotId[]).find((s) => seatMap[s]?.agentId === agentId);
+    if (slot) inspectSlot(slot);
+  }, [inspectSlot]);
 
   // Elevator Floor Ride trigger from HUD
   const handleElevatorRide = useCallback((floorNum: number) => {
@@ -338,6 +357,9 @@ export function StudioCanvas({
         workstationSystem.updateWhiteboardPlan(content);
       },
     });
+
+    commanderBoardRef.current = (title, columns) => workstationSystem.updateCommanderBoard(title, columns);
+    workstationSystem.updateCommanderBoard(commanderBoardData.current.title, commanderBoardData.current.columns);
 
     updateWhiteboardTriggerRef.current = (content: WhiteboardContent) => {
       workstationSystem.updateWhiteboardPlan(content);
@@ -644,27 +666,7 @@ export function StudioCanvas({
       }
 
       if (hitSlot) {
-        const occupant = propsRef.current.seats[hitSlot];
-        const member = propsRef.current.members.find(
-          (m) => m.id === occupant?.agentId || m.id.toLowerCase() === hitSlot?.toLowerCase()
-        );
-        const config = WORKSTATION_CONFIGS.find((c) => c.slot === hitSlot);
-        const effectiveMember: OfficeMember = member || {
-          id: occupant?.agentId || hitSlot,
-          name: occupant?.name || config?.label || hitSlot.toUpperCase(),
-          color: ROLE_COLORS[hitSlot] || '#d98b4d',
-          model: 'gemini-2.5-pro',
-          startedAt: new Date(Date.now() - 3600000).toISOString(),
-          currentTask: 'Active at workstation, standing by for pipeline instructions.',
-          billable: 50500,
-          usage: { totalCostUsd: 0.042 },
-        };
-
-        propsRef.current.onInspectCharacter?.(
-          effectiveMember,
-          hitSlot,
-          propsRef.current.agentStatus[effectiveMember.id] || 'idle'
-        );
+        inspectSlot(hitSlot);
         return;
       }
 
@@ -882,11 +884,6 @@ export function StudioCanvas({
           }
           workstationSystem.updateStatus(config.slot, status, timeSec, speech);
         });
-      }
-
-      // Update Commander Desk Ultrawide Dashboard when on Floor 2
-      if (activeFloor === 2) {
-        workstationSystem.updateCommanderScreen(timeSec);
       }
 
       // --- One interaction target: the nearest thing within reach. The one

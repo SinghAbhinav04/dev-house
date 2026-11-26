@@ -4,7 +4,8 @@ import type { AABB, WorkstationDef } from '../types';
 import type { TextureCache } from './texture-cache';
 import {
   createWorkstationScreen,
-  createCommanderUltrawideScreen,
+  createCommanderBoardScreen,
+  type CommanderBoardColumn,
   type ScreenTextureResult,
 } from './screen-texture-factory';
 
@@ -28,7 +29,8 @@ export interface WorkstationsResult {
   obstacles: AABB[];
   setActiveFloor: (floorNum: number) => void;
   updateStatus: (slot: SlotId, status: string, timeSec: number, speech?: string | null) => void;
-  updateCommanderScreen: (timeSec: number) => void;
+  /** Draw the run's board on the commander desk's screen. */
+  updateCommanderBoard: (title: string, columns: CommanderBoardColumn[]) => void;
   updateWhiteboardPlan: (content: WhiteboardContent) => void;
   dispose: () => void;
 }
@@ -658,7 +660,7 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
   cmdMonitorGroup.add(ultrawideBezel);
 
   // Ultrawide Curved Monitor with Realtime Lead Command Dashboard
-  const cmdScreenTex = createCommanderUltrawideScreen();
+  const cmdScreenTex = createCommanderBoardScreen();
   const cmdScreenMat = new THREE.MeshStandardMaterial({
     color: '#ffffff',
     map: cmdScreenTex.texture,
@@ -759,8 +761,8 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
     ws.deskLight.intensity = isActive ? 1.4 : 0.9;
   };
 
-  const updateCommanderScreen = (timeSec: number) => {
-    cmdScreenTex.update(timeSec);
+  const updateCommanderBoard = (title: string, columns: CommanderBoardColumn[]) => {
+    cmdScreenTex.draw(title, columns);
   };
 
   const dispose = () => {
@@ -786,7 +788,7 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
     obstacles,
     setActiveFloor,
     updateStatus,
-    updateCommanderScreen,
+    updateCommanderBoard,
     updateWhiteboardPlan,
     dispose,
   };

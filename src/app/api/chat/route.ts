@@ -206,6 +206,14 @@ function streamClaude(
     const child = trackDirectTurn(runner.spawn(opts));
     const canFallbackToHost = child.backend === 'docker' && runner.supportsHostFallback(opts);
 
+    // Busy while the turn runs, in either mode, so the studio shows them
+    // typing at their desk; set back to idle when the process closes.
+    try {
+      const s = JSON.parse(readFileSync(eventsFile, 'utf8'));
+      s.agentStatus = { ...(s.agentStatus || {}), [agent]: 'active' };
+      writeJsonAtomic(eventsFile, s);
+    } catch {}
+
     if (child.backend === 'docker') {
       try {
         const s = JSON.parse(readFileSync(eventsFile, 'utf8'));

@@ -1,17 +1,29 @@
 'use client';
 
+import { useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { OfficeMember } from '@/components/mission/MemberStatCard';
 import { uptimeLabel, compactTokens, energyLabel } from '@/components/mission/MemberStatCard';
 import { shortModelLabel, SLOT_LABELS, type SlotId } from '@/lib/team/types';
+import { TICKET_STATUS_LABELS, type Ticket } from '@/lib/tickets';
 
 interface CharacterInspectorModalProps {
+  open: boolean;
+  /** Null for an empty desk. */
   member: OfficeMember | null;
   slot?: SlotId;
   status: string;
+  /** What they are doing in the room right now ("Walking to the whiteboard"). */
+  activity?: string;
+  /** The ticket they are on. */
+  ticket?: Ticket;
+  /** Their last few events, newest first. */
+  recent?: readonly { time: string; type: string; text: string }[];
   now: number;
   onClose: () => void;
   onOpenChat: (agentId: string) => void;
+  /** Open the team tab to put someone at an empty desk. */
+  onOpenTeam?: () => void;
 }
 
 /**
@@ -20,14 +32,29 @@ interface CharacterInspectorModalProps {
  * Uses the Warm Studio palette (No generic AI cyan).
  */
 export function CharacterInspectorModal({
+  open,
   member,
   slot,
   status,
+  activity,
+  ticket,
+  recent = [],
   now,
   onClose,
   onOpenChat,
+  onOpenTeam,
 }: CharacterInspectorModalProps) {
-  if (!member) return null;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  if (!member) return <EmptyDesk slot={slot} onClose={onClose} onOpenTeam={onOpenTeam} />;
 
   const energy = energyLabel(member);
   const isActive = status === 'active' || status === 'working';
@@ -81,14 +108,33 @@ export function CharacterInspectorModal({
             </div>
           </div>
 
-          {/* Assigned Task Section */}
+          {/* What they're doing */}
           <div className="mt-4 rounded-xl border border-[rgba(244,236,226,0.08)] bg-[#262019]/70 p-3.5">
-            <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#8a7a6b]">
-              Current Assigned Task / Focus
+            <div className="mb-1 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[#8a7a6b]">
+              <span>Doing now</span>
+              {activity && <span className="normal-case tracking-normal text-[#d98b4d]">{activity}</span>}
             </div>
             <p className="text-[12px] leading-relaxed text-[#f4ece2]">
-              {member.currentTask || (isActive ? 'Executing assigned task turn...' : 'Standing by at workstation for instructions.')}
+              {member.currentTask || (isActive ? 'Working on their turn…' : 'Free — waiting for the next hand-off.')}
             </p>
+            {ticket && (
+              <div className="mt-2.5 flex items-start gap-2 rounded-lg border border-[rgba(244,236,226,0.08)] bg-[#17130f] p-2">
+                <span className="font-mono text-[10px] font-bold text-[#d98b4d]">{ticket.id}</span>
+                <span className="min-w-0 flex-1 text-[11px] leading-snug text-[#e8dccd]">{ticket.title}</span>
+                <span className="rounded bg-[#262019] px-1.5 font-mono text-[9px] font-bold uppercase text-[#c9b8a6]">
+                  {TICKET_STATUS_LABELS[ticket.status]}
+                </span>
+              </div>
+            )}
+            {recent.length > 0 && (
+              <ol className="mt-2.5 space-y-1 border-l border-[rgba(244,236,226,0.1)] pl-2.5">
+                {recent.map((e, i) => (
+                  <li key={i} className="truncate text-[11px] text-[#c9b8a6]" title={e.text}>
+                    {e.text}
+                  </li>
+                ))}
+              </ol>
+            )}
           </div>
 
           {/* Real-Time Metrics Grid */}
@@ -142,5 +188,38 @@ export function CharacterInspectorModal({
         </motion.div>
       </div>
     </AnimatePresence>
+  );
+}
+
+/** A desk nobody is sitting at: say so, and point at where to fix it. */
+function EmptyDesk({ slot, onClose, onOpenTeam }: { slot?: SlotId; onClose: () => void; onOpenTeam?: () => void }) {
+  const role = slot ? SLOT_LABELS[slot] : 'This';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <div role="dialog" aria-label="Empty desk" className="w-full max-w-sm rounded-2xl border border-[rgba(244,236,226,0.12)] bg-[#17130f] p-6 text-[#f4ece2] shadow-2xl">
+        <h3 className="text-lg font-bold">Empty desk</h3>
+        <p className="mt-1 text-[12px] leading-relaxed text-[#c4b5a5]">
+          {role} desk has nobody at it, so this part of the run is skipped. Add a teammate to the {role.toLowerCase()} slot to fill it.
+        </p>
+        <div className="mt-5 flex gap-2">
+          {onOpenTeam && (
+            <button
+              type="button"
+              onClick={onOpenTeam}
+              className="flex-1 rounded-xl bg-[#d98b4d] py-2.5 text-xs font-bold uppercase tracking-wider text-[#17130f]"
+            >
+              Open team setup →
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-[rgba(244,236,226,0.1)] bg-[#262019] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[#8a7a6b] hover:text-[#f4ece2]"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

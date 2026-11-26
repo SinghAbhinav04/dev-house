@@ -560,7 +560,26 @@ export function createWorkstationScreen(slot: SlotId, screenIndex: 0 | 1): Scree
 /**
  * Creates the Ultrawide Curved Monitor texture for Commander Desk ("My Computer" on 3F).
  */
-export function createCommanderUltrawideScreen(): ScreenTextureResult {
+/** One column of the board as the commander screen shows it. */
+export interface CommanderBoardColumn {
+  label: string;
+  count: number;
+  /** The top few cards: id and title. */
+  cards: { id: string; title: string; color: string }[];
+}
+
+export interface CommanderBoardScreen {
+  texture: THREE.CanvasTexture;
+  /** Redraw with the run's board; cheap to call only when the tickets change. */
+  draw: (title: string, columns: CommanderBoardColumn[]) => void;
+  dispose: () => void;
+}
+
+/**
+ * The commander desk's ultrawide: a mini version of the ticket board, so you
+ * can see work move from across the room. Drawn on change, not per frame.
+ */
+export function createCommanderBoardScreen(): CommanderBoardScreen {
   const width = 1024;
   const height = 340;
   const canvas = document.createElement('canvas');
@@ -573,150 +592,95 @@ export function createCommanderUltrawideScreen(): ScreenTextureResult {
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
 
-  let lastTimeSec = 0;
+  const clip = (text: string, max: number) => {
+    if (ctx.measureText(text).width <= max) return text;
+    let t = text;
+    while (t.length > 1 && ctx.measureText(`${t}…`).width > max) t = t.slice(0, -1);
+    return `${t}…`;
+  };
 
-  const renderContent = (timeSec: number) => {
-    // Ultrawide deep charcoal surface
+  const draw = (title: string, columns: CommanderBoardColumn[]) => {
     ctx.fillStyle = '#120f0d';
     ctx.fillRect(0, 0, width, height);
-
-    // Header bar
     ctx.fillStyle = '#1e1814';
-    ctx.fillRect(0, 0, width, 28);
-
+    ctx.fillRect(0, 0, width, 30);
     ctx.fillStyle = '#d98b4d';
-    ctx.font = 'bold 11px monospace';
-    ctx.fillText('ANTIGRAVITY DEV HOUSE OS v2.4 • LEAD WORKSPACE (2F DEV STUDIO)', 20, 18);
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText('TEAM BOARD', 18, 20);
+    ctx.fillStyle = '#c9b8a6';
+    ctx.font = '12px monospace';
+    ctx.fillText(clip(title || 'No run yet — write a brief on the whiteboard', width - 180), 130, 20);
 
-    const isBlink = Math.floor(timeSec * 2) % 2 === 0;
-    ctx.fillStyle = isBlink ? '#8fae60' : '#4ade80';
-    ctx.beginPath();
-    ctx.arc(width - 150, 14, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#f4ece2';
-    ctx.font = '10px monospace';
-    ctx.fillText('SYSTEM: ONLINE (120 FPS)', width - 138, 18);
-
-    // Left Column: Squad Live Status (Width: 310)
-    ctx.fillStyle = '#17130f';
-    ctx.fillRect(16, 40, 310, height - 56);
-    ctx.strokeStyle = '#2d241d';
-    ctx.strokeRect(16, 40, 310, height - 56);
-
-    ctx.fillStyle = '#d98b4d';
-    ctx.font = 'bold 11px monospace';
-    ctx.fillText('SQUAD MATRIX (FLOOR 2)', 30, 62);
-
-    const members = [
-      { name: 'Lead Architect', role: 'Supervisor (2F)', state: 'ACTIVE', color: '#d98b4d' },
-      { name: 'Core Engineer', role: 'Coder (2F)', state: 'CODING', color: '#8fae60' },
-      { name: 'QA Specialist', role: 'Tester (2F)', state: 'PASS (42)', color: '#8fae60' },
-      { name: 'Security Auditor', role: 'Auditor (2F)', state: 'CLEAN (0)', color: '#7fa8a0' },
-      { name: 'Staff Reviewer', role: 'Reviewer (2F)', state: 'APPROVED', color: '#d9a441' },
-      { name: 'Systems Planner', role: 'Planner (2F)', state: 'LOCKED', color: '#c084fc' },
-    ];
-
-    members.forEach((m, idx) => {
-      ctx.fillStyle = '#201a14';
-      ctx.fillRect(28, 74 + idx * 32, 286, 26);
-
-      ctx.fillStyle = m.color;
-      ctx.beginPath();
-      ctx.arc(38, 87 + idx * 32, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#f4ece2';
-      ctx.font = 'bold 10px monospace';
-      ctx.fillText(m.name, 48, 90 + idx * 32);
-
-      ctx.fillStyle = m.color;
-      ctx.textAlign = 'right';
-      ctx.fillText(m.state, 302, 90 + idx * 32);
+    const total = columns.reduce((n, c) => n + c.count, 0);
+    if (total === 0) {
+      ctx.fillStyle = '#8a7a6b';
+      ctx.font = 'italic 15px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('No tickets yet', width / 2, height / 2 + 10);
       ctx.textAlign = 'left';
+      texture.needsUpdate = true;
+      return;
+    }
+
+    const gap = 8;
+    const colW = (width - 16 * 2 - gap * (columns.length - 1)) / columns.length;
+    columns.forEach((col, i) => {
+      const x = 16 + i * (colW + gap);
+      ctx.fillStyle = '#1a1612';
+      ctx.fillRect(x, 40, colW, height - 52);
+      ctx.fillStyle = '#c9b8a6';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(clip(col.label.toUpperCase(), colW - 34), x + 8, 58);
+      ctx.fillStyle = col.count ? '#f4ece2' : '#5c5046';
+      ctx.textAlign = 'right';
+      ctx.fillText(String(col.count), x + colW - 8, 58);
+      ctx.textAlign = 'left';
+
+      col.cards.slice(0, 4).forEach((card, k) => {
+        const y = 70 + k * 62;
+        ctx.fillStyle = '#241d17';
+        ctx.fillRect(x + 6, y, colW - 12, 54);
+        ctx.fillStyle = card.color;
+        ctx.fillRect(x + 6, y, 3, 54);
+        ctx.fillStyle = '#8a7a6b';
+        ctx.font = 'bold 10px monospace';
+        ctx.fillText(card.id, x + 15, y + 15);
+        ctx.fillStyle = '#f4ece2';
+        ctx.font = '11px monospace';
+        const words = card.title.split(' ');
+        let line = '';
+        let row = 0;
+        for (const word of words) {
+          const next = line ? `${line} ${word}` : word;
+          if (ctx.measureText(next).width > colW - 26 && line) {
+            ctx.fillText(line, x + 15, y + 31 + row * 14);
+            row += 1;
+            line = word;
+            if (row === 1) {
+              ctx.fillText(clip(words.slice(words.indexOf(word)).join(' '), colW - 26), x + 15, y + 31 + row * 14);
+              line = '';
+              break;
+            }
+          } else {
+            line = next;
+          }
+        }
+        if (line) ctx.fillText(line, x + 15, y + 31 + row * 14);
+      });
+      if (col.count > 4) {
+        ctx.fillStyle = '#8a7a6b';
+        ctx.font = '10px monospace';
+        ctx.fillText(`+${col.count - 4} more`, x + 8, height - 20);
+      }
     });
-
-    // Center Column: Live Code Pipeline & Engine Graph (Width: 370)
-    ctx.fillStyle = '#17130f';
-    ctx.fillRect(340, 40, 370, height - 56);
-    ctx.strokeStyle = '#2d241d';
-    ctx.strokeRect(340, 40, 370, height - 56);
-
-    ctx.fillStyle = '#d98b4d';
-    ctx.font = 'bold 11px monospace';
-    ctx.fillText('LIVE CODE ENGINE STREAM', 356, 62);
-
-    const codeLines = [
-      '// Antigravity 3D Dev House Studio',
-      'const studio = new StudioEngine({',
-      '  lights: StudioLighting.WarmArchitectural,',
-      '  floor: ActiveFloor.CommandStudio,',
-      '  ac: { temp: 70, coolingStream: true },',
-      '  espressoBar: { buff: "+40% Sprint Boost" },',
-      '});',
-      'studio.onReady(() => {',
-      '  console.log("Dev House Studio fully operational!");',
-      '});',
-    ];
-
-    codeLines.forEach((cl, idx) => {
-      ctx.fillStyle = cl.startsWith('//') ? '#8a7a6b' : cl.includes('StudioEngine') ? '#d98b4d' : '#8fae60';
-      ctx.font = '10px monospace';
-      ctx.fillText(cl, 356, 88 + idx * 17);
-    });
-
-    // Center interactive prompt banner
-    ctx.fillStyle = 'rgba(217, 139, 77, 0.2)';
-    ctx.fillRect(356, height - 76, 338, 28);
-    ctx.strokeStyle = '#d98b4d';
-    ctx.strokeRect(356, height - 76, 338, 28);
-    ctx.fillStyle = '#f4ece2';
-    ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('Press [E] or Click to Open Full Command Center', 356 + 169, height - 58);
-    ctx.textAlign = 'left';
-
-    // Right Column: System Telemetry & Quick Shortcuts (Width: 280)
-    ctx.fillStyle = '#17130f';
-    ctx.fillRect(724, 40, 284, height - 56);
-    ctx.strokeStyle = '#2d241d';
-    ctx.strokeRect(724, 40, 284, height - 56);
-
-    ctx.fillStyle = '#d98b4d';
-    ctx.font = 'bold 11px monospace';
-    ctx.fillText('FACILITY CONTROLS', 740, 62);
-
-    const shortcuts = [
-      '• 1F - 3F: Elevator Floor Transit',
-      '• Lights Switch: Studio / Cozy Mood',
-      '• AC Mini-Split: 70°F Louver Stream',
-      '• Espresso Bar: Brew & Speed Boost',
-      '• WASD: Smooth 3D Navigation',
-      '• Shift: Sprint (+40% Espresso Buff)',
-      '• Right Drag: Orbit Camera',
-    ];
-
-    shortcuts.forEach((sc, idx) => {
-      ctx.fillStyle = '#f4ece2';
-      ctx.font = '10px monospace';
-      ctx.fillText(sc, 740, 88 + idx * 22);
-    });
-
     texture.needsUpdate = true;
   };
 
-  renderContent(0);
+  draw('', []);
 
-  const update = (timeSec: number) => {
-    // Update every ~2 seconds for clock pulse
-    if (Math.floor(timeSec) !== Math.floor(lastTimeSec)) {
-      lastTimeSec = timeSec;
-      renderContent(timeSec);
-    }
+  return {
+    texture,
+    draw,
+    dispose: () => texture.dispose(),
   };
-
-  const dispose = () => {
-    texture.dispose();
-  };
-
-  return { texture, update, dispose };
 }

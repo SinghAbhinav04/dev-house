@@ -118,16 +118,29 @@ export function DevHouseStudio3D({
   }, []);
 
   // Character Inspector Modal State
-  const [inspectorMember, setInspectorMember] = useState<OfficeMember | null>(null);
-  const [inspectorSlot, setInspectorSlot] = useState<SlotId | undefined>(undefined);
-  const [inspectorStatus, setInspectorStatus] = useState<string>('idle');
+  // Who the inspector is open on: a desk, and the teammate at it (if any).
+  const [inspector, setInspector] = useState<{ slot: SlotId; memberId: string | null; activity?: string } | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const inspectorMember = inspector?.memberId ? members.find((m) => m.id === inspector.memberId) ?? null : null;
 
   useEffect(() => {
-    if (!inspectorMember) return;
+    if (!inspector) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [inspectorMember]);
+  }, [inspector]);
+
+  // What they're on: their most recently touched open ticket, and their last few moves.
+  const inspectedId = inspector?.memberId ?? null;
+  const inspectorTicket = useMemo(() => {
+    if (!inspectedId) return undefined;
+    return tickets
+      .filter((t) => t.assignee === inspectedId && !['done', 'rejected', 'backlog'].includes(t.status))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  }, [inspectedId, tickets]);
+  const inspectorEvents = useMemo(() => {
+    if (!inspectedId) return [];
+    return (events ?? []).filter((e) => e.agent === inspectedId && e.type !== 'tool_use').slice(-4).reverse();
+  }, [inspectedId, events]);
 
   return (
     <div className="relative flex h-full min-h-[580px] w-full flex-col overflow-hidden rounded-2xl border border-line bg-[#030306]">
@@ -238,24 +251,17 @@ export function DevHouseStudio3D({
           members={members}
           whiteboard={whiteboard}
           events={events}
+          tickets={tickets}
+          boardTitle={board?.brief?.text?.split('\n')[0]}
           onControlsReady={handleControlsReady}
-          onAgentClick={(agentId) => {
-            const member = members.find((m) => m.id === agentId);
-            if (member) {
-              setInspectorMember(member);
-              setInspectorStatus(agentStatus[agentId] || 'idle');
-            }
-            onAgentClick?.(agentId);
-          }}
+          onAgentClick={(agentId) => onAgentClick?.(agentId)}
           onOpenCommanderDesk={() => {
             setCommanderTab('board');
             setIsCommanderOpen(true);
           }}
           onOpenWhiteboard={() => setIsWhiteboardOpen(true)}
-          onInspectCharacter={(member, slot, status) => {
-            setInspectorMember(member);
-            setInspectorSlot(slot);
-            setInspectorStatus(status || 'idle');
+          onInspectCharacter={(member, slot, _status, activity) => {
+            setInspector({ slot, memberId: member?.id ?? null, activity });
           }}
         />
       </div>
@@ -274,13 +280,22 @@ export function DevHouseStudio3D({
 
       {/* Character Inspector Modal (When tapping any 3D dev) */}
       <CharacterInspectorModal
+        open={inspector !== null}
         member={inspectorMember}
-        slot={inspectorSlot}
-        status={inspectorStatus}
+        slot={inspector?.slot}
+        status={inspectorMember ? agentStatus[inspectorMember.id] || 'idle' : 'idle'}
+        activity={inspector?.activity}
+        ticket={inspectorTicket}
+        recent={inspectorEvents}
         now={nowMs}
-        onClose={() => setInspectorMember(null)}
+        onClose={() => setInspector(null)}
+        onOpenTeam={() => {
+          setInspector(null);
+          setCommanderTab('team');
+          setIsCommanderOpen(true);
+        }}
         onOpenChat={(agentId) => {
-          setInspectorMember(null);
+          setInspector(null);
           setCommanderTab('chat');
           setIsCommanderOpen(true);
           onAgentClick?.(agentId);
