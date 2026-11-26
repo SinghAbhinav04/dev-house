@@ -165,7 +165,7 @@ export function TicketBoard({ tickets, people, onOp, compact = false }: TicketBo
               <section
                 key={column.id}
                 aria-label={column.label}
-                className={`flex flex-col rounded-xl ${compact ? 'min-w-[9.5rem]' : 'min-w-[11rem]'} flex-1 basis-0 border border-[rgba(244,236,226,0.08)] bg-[#1a1612]`}
+                className={`flex flex-col rounded-xl min-w-[9.5rem] flex-1 basis-0 border border-[rgba(244,236,226,0.08)] bg-[#1a1612]`}
               >
                 <header className="flex items-center justify-between border-b border-[rgba(244,236,226,0.06)] px-3 py-2">
                   <span className="font-mono text-[10px] font-bold uppercase tracking-[0.15em] text-[#c9b8a6]">{column.label}</span>
