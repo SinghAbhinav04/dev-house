@@ -5,8 +5,10 @@ packages:
   - '.'
 
 allowBuilds:
+  esbuild: false
   sharp: false
   unrs-resolver: false
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
+  - esbuild

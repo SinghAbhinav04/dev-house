@@ -2,10 +2,11 @@ import { execFileSync, spawn as nodeSpawn, type ChildProcessWithoutNullStreams }
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 
 import type { MemberCapabilities } from '../src/lib/team/types.ts';
 import { resolveCli } from '../src/lib/cli/registry.ts';
+import { resolveCommand, userHome } from '../src/lib/platform.ts';
 import type { AgentCli, CliId, PathLayout } from '../src/lib/cli/types.ts';
 
 export type { PathLayout };
@@ -182,7 +183,7 @@ function readMacOsKeychainCredentials(): string | null {
 }
 
 export function resolveDockerCredentialBootstrap(): DockerCredentialBootstrap {
-  const hostCredentialsPath = join(homedir(), '.claude', '.credentials.json');
+  const hostCredentialsPath = join(userHome(), '.claude', '.credentials.json');
   if (hasUsableCredentialsFile(hostCredentialsPath)) {
     return createCredentialBootstrap(
       readFileSync(hostCredentialsPath, 'utf8'),
@@ -436,10 +437,19 @@ export function buildDockerArgs(
 
 export class HostRunner implements Runner {
   spawn(opts: RunnerOptions): SpawnedRunnerChild {
-    const child = nodeSpawn(cliFor(opts).binary, buildClaudeArgs(opts), {
+    // On Windows a bare `claude` may be claude.exe or an npm claude.cmd shim,
+    // and spawning a .cmd without a shell fails. resolveCommand finds the real
+    // thing on every platform without ever involving a shell, so the prompt
+    // argument reaches the CLI byte for byte.
+    // Resolved against the child's own PATH, not this server's: an operator
+    // (or a test) that points PATH somewhere for the member means it.
+    const env = buildRunnerEnv(opts);
+    const resolved = resolveCommand(cliFor(opts).binary, { env });
+    const child = nodeSpawn(resolved.command, [...resolved.prefixArgs, ...buildClaudeArgs(opts)], {
       cwd: opts.projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: buildRunnerEnv(opts),
+      env,
+      windowsHide: true,
     });
 
     // Nothing here ever writes to the child's stdin — the prompt goes in as an

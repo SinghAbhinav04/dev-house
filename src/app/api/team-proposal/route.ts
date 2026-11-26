@@ -1,5 +1,4 @@
 import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -8,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createRunner } from '../../../../pipeline/runner.ts';
 import { createClaudeDecoder, type AgentEvent } from '@/lib/cli/decoder';
 import { readRoster } from '@/lib/team/roster';
+import { buildsDir } from '@/lib/platform';
 import { buildRunPlan } from '@/lib/team/slots';
 import { MAX_TEAM_SIZE, OFFICE_FULL_MESSAGE } from '@/lib/team/types';
 import {
@@ -28,7 +28,7 @@ import {
  */
 
 const runner = createRunner();
-const DRAFT_DIR = join(homedir(), 'Builds', '.team-draft');
+const DRAFT_DIR = join(buildsDir(), '.team-draft');
 const DRAFT_TIMEOUT_MS = 180_000;
 
 /** Runs one turn with no session, no resume and nothing to write to. */

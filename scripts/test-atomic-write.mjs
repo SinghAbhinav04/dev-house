@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync, readdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -63,7 +63,7 @@ chmodSync(readOnlyDir, 0o700);
 
 if (threw) {
   assert.equal(
-    existsSync(`${blocked}.tmp`),
+    readdirSync(readOnlyDir).some((name) => name.endsWith(".tmp")),
     false,
     'a failed write cleans up its temp file rather than leaving one that reads like a crash',
   );

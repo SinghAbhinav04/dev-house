@@ -6,14 +6,14 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { EMPTY_RUNTIME, normalizeRuntime } from './pipeline-runtime.ts';
 import { emptyBreakdown, normalizeUsage } from './team/usage.ts';
 import { normalizeBoard, normalizeTickets } from './tickets.ts';
+import { buildsDir } from './platform.ts';
 
-export const BUILDS_DIR = join(homedir(), 'Builds');
+export const BUILDS_DIR = buildsDir();
 export const STAGING_DIR = join(BUILDS_DIR, '.staging');
 export const MANUAL_DIR = join(BUILDS_DIR, '.manual');
 

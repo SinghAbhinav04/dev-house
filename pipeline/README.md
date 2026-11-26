@@ -16,7 +16,7 @@ The key idea is that this folder contains the team's shared operating system:
 
 - `orchestrator.ts` — Spawns agent sessions, routes signals, enforces pipeline flow, handles supervisor pause/resume controls, and (when the optional Security Audit toggle is on) drives the audit phase + per-finding fix loop
 - `runner.ts` — Runner abstraction. Contains `HostRunner` (the default execution path) and `DockerRunner` (kept for the narrow cases where it works; not the default — see [SECURITY.md](../SECURITY.md))
-- `.claude/hooks/approval-gate.sh` — Per-member permission enforcement, driven by the capability manifest the server writes to `<project>/.claude/team-manifest.json`
+- `.claude/hooks/approval-gate.mjs` — Per-member (Node, no bash/jq; runs on Windows, macOS and Linux) permission enforcement, driven by the capability manifest the server writes to `<project>/.claude/team-manifest.json`
 - `.claude/settings.json` — Hook configuration
 - `build-plan-template.md` — Template the planner follows when writing plans
 - `checklist-template.md` — Pipeline checklist copied to each build (includes the optional Phase 4b: Security Audit section)

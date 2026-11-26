@@ -23,6 +23,12 @@ import { hasValue, resolvePermissionMode } from './args.ts';
 import type { AgentCli, CliModel, FetchedTurn, PathLayout, SpawnRequest } from './types.ts';
 import type { MemberPermissionMode } from '../team/types.ts';
 import type { TokenUsage } from '../team/usage.ts';
+import { resolveCommand } from '../platform.ts';
+
+/** `opencode` is an npm .cmd shim on Windows; see resolveCommand. */
+function opencodeCommand() {
+  return resolveCommand('opencode');
+}
 
 /**
  * A small, stable set for when the live catalog cannot be read.
@@ -86,7 +92,7 @@ export function exportTurnResult(sessionId: string, cwd: string): FetchedTurn {
   let handle: number | undefined;
   try {
     handle = openSync(spool, 'w');
-    execFileSync('opencode', ['export', sessionId], {
+    execFileSync(opencodeCommand().command, [...opencodeCommand().prefixArgs, 'export', sessionId], {
       cwd,
       // Generous: this re-serialises the ENTIRE conversation every turn, so it
       // slows as the session grows — 16.5s for an 850KB planning session.
@@ -232,7 +238,7 @@ function skillEnvironment(request: SpawnRequest, layout: PathLayout): Record<str
 /** Models this install actually has, grouped later by provider in the UI. */
 export function liveOpencodeModels(): CliModel[] {
   try {
-    const out = execFileSync('opencode', ['models'], { encoding: 'utf8', timeout: 30_000 });
+    const out = execFileSync(opencodeCommand().command, [...opencodeCommand().prefixArgs, 'models'], { encoding: 'utf8', timeout: 30_000 });
     const models = out
       .split('\n')
       .map((line) => line.trim())

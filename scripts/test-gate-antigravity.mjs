@@ -50,11 +50,11 @@ writeFileSync(
 );
 
 // Both scripts, since the shim invokes the gate as its sibling.
-for (const file of ['approval-gate.sh', 'gate-antigravity.sh']) {
+for (const file of ['approval-gate.mjs', 'gate-antigravity.mjs']) {
   writeFileSync(join(hooksDir, file), readFileSync(join(hooksSrc, file), 'utf8'), { mode: 0o755 });
 }
 
-const shim = join(hooksDir, 'gate-antigravity.sh');
+const shim = join(hooksDir, 'gate-antigravity.mjs');
 
 /** Drive the shim exactly as agy would. */
 function invoke({ tool, args = {}, member = 'reacty', securityMode = 'fast' }) {
@@ -65,7 +65,7 @@ function invoke({ tool, args = {}, member = 'reacty', securityMode = 'fast' }) {
     workspacePaths: [projectDir],
   };
 
-  const result = spawnSync('bash', [shim], {
+  const result = spawnSync(process.execPath, [shim], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
     // agy runs the hook from <project>/.agents, not the project root.
@@ -151,7 +151,7 @@ check('a command with no CommandLine is refused', () => {
 });
 
 check('a payload naming no tool is refused', () => {
-  const result = spawnSync('bash', [shim], {
+  const result = spawnSync(process.execPath, [shim], {
     input: JSON.stringify({ toolCall: { args: {} }, conversationId: 'c' }),
     encoding: 'utf8',
     cwd: join(projectDir, '.agents'),
@@ -161,7 +161,7 @@ check('a payload naming no tool is refused', () => {
 });
 
 check('an unparseable payload is refused', () => {
-  const result = spawnSync('bash', [shim], {
+  const result = spawnSync(process.execPath, [shim], {
     input: 'this is not json',
     encoding: 'utf8',
     cwd: join(projectDir, '.agents'),
@@ -171,7 +171,7 @@ check('an unparseable payload is refused', () => {
 });
 
 check('a member with no identity is refused', () => {
-  const result = spawnSync('bash', [shim], {
+  const result = spawnSync(process.execPath, [shim], {
     input: JSON.stringify({ toolCall: { name: 'view_file', args: { AbsolutePath: join(projectDir, 'app.ts') } } }),
     encoding: 'utf8',
     cwd: join(projectDir, '.agents'),
@@ -252,7 +252,7 @@ check('every subagent tool is refused, including the undocumented fourth', () =>
 });
 
 check('a command that would rewrite the gate is refused', () => {
-  assert.equal(invoke({ tool: 'run_command', args: { CommandLine: 'rm .claude/hooks/approval-gate.sh' } }).decision, 'deny');
+  assert.equal(invoke({ tool: 'run_command', args: { CommandLine: 'rm .claude/hooks/approval-gate.mjs' } }).decision, 'deny');
 });
 
 check('a command that would spawn another agent is refused', () => {

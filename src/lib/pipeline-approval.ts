@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { buildsDir as defaultBuildsDir } from './platform.ts';
 
 export interface PendingApproval {
   requestId: string;
@@ -96,7 +97,7 @@ export function updatePendingApproval(projectDir: string, approved: boolean, req
 }
 
 export function findLatestPendingApproval(
-  buildsDir: string = join(homedir(), 'Builds')
+  buildsDir: string = defaultBuildsDir()
 ): { projectDir: string; pending: PendingApproval } | null {
   try {
     const dirs = readdirSync(buildsDir)

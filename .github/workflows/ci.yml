@@ -47,10 +47,40 @@ jobs:
         run: npm run lint
 
       # Runs every scripts/test-*.mjs, including the hook contract test, which
-      # drives the real shell script against a temporary $HOME. That one is the
+      # drives the real gate against a temporary $HOME. That one is the
       # security boundary, so a failure here is not a flake.
       - name: Test
         run: npm test
 
       - name: Build
         run: npm run build
+
+  # The app runs on Windows and macOS too: the gate, Stop, CLI resolution and
+  # the orchestrator launch all have per-platform paths, and each of them used
+  # to fail silently off Linux. A separate job rather than a matrix on `check`,
+  # because the ruleset requires that context by its exact name.
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

@@ -134,7 +134,7 @@ description sit in context; the body loads only when the model invokes it.
 LLMs ignore instructions in prompts. A member told "only write plan.md" will
 write code.
 
-`pipeline/.claude/hooks/approval-gate.sh` gates every tool call. Since members
+`pipeline/.claude/hooks/approval-gate.mjs` gates every tool call. Since members
 are user-authored there is no fixed set of identities to match, so the server
 writes a capability manifest at run start and the hook reads it:
 

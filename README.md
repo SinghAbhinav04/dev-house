@@ -125,7 +125,9 @@ holding their `role.md` and their skills.
 
 ### Requirements
 
-- Node 22+ and pnpm
+- Node 22+ and pnpm, on Windows, macOS or Linux. Nothing else: the permission
+  gate, Stop and the orchestrator launch are plain Node, with no bash, `jq` or
+  `npx` needed
 - At least one engine, logged in:
   - **Claude Code** 2.1.220 or newer
   - **OpenCode** — connect a provider in the UI, or `opencode auth login`

@@ -3,7 +3,7 @@
 /**
  * OpenCode gate shim.
  *
- * Translates a `tool.execute.before` call into approval-gate.sh's contract and
+ * Translates a `tool.execute.before` call into approval-gate.mjs's contract and
  * back. It decides nothing itself: one set of rules, one manifest, one contract
  * suite — a second implementation would be a second thing to drift.
  *
@@ -26,7 +26,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const GATE = join(dirname(fileURLToPath(import.meta.url)), 'approval-gate.sh');
+const GATE = join(dirname(fileURLToPath(import.meta.url)), 'approval-gate.mjs');
 
 /** Tools whose verdict needs no argument: the gate decides on the name alone. */
 const ARGLESS = new Map([
@@ -67,7 +67,7 @@ function consultGate(toolName, toolInput, cwd) {
   let stderr = '';
 
   try {
-    stdout = execFileSync('bash', [GATE], { input: payload, encoding: 'utf8', timeout: 20_000 });
+    stdout = execFileSync(process.execPath, [GATE], { input: payload, encoding: 'utf8', timeout: 20_000, windowsHide: true });
   } catch (err) {
     status = err.status ?? 1;
     stdout = err.stdout ?? '';
@@ -78,8 +78,11 @@ function consultGate(toolName, toolInput, cwd) {
   if (status !== 0) deny(`the gate exited unexpectedly (${status})`);
 
   let decision = '';
+  let askReason = '';
   try {
-    decision = JSON.parse(stdout).hookSpecificOutput?.permissionDecision ?? '';
+    const verdict = JSON.parse(stdout).hookSpecificOutput ?? {};
+    decision = verdict.permissionDecision ?? '';
+    askReason = verdict.permissionDecisionReason ?? '';
   } catch {
     deny('the gate returned no readable verdict');
   }
@@ -88,7 +91,7 @@ function consultGate(toolName, toolInput, cwd) {
   // OpenCode cannot prompt a human mid-turn, so a request for approval is a
   // refusal here — reported as one so the log says which it was.
   if (decision === 'ask') {
-    deny(String(stderr).split('\n')[0] || 'this member needs approval for that, which this CLI cannot ask for');
+    deny(askReason || String(stderr).split('\n')[0] || 'this member needs approval for that, which this CLI cannot ask for');
   }
   deny('the gate returned no readable verdict');
 }

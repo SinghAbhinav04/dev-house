@@ -15,7 +15,6 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import {
@@ -46,6 +45,7 @@ import {
 } from './types.ts';
 import { DEFAULT_CLI, isCliId, type CliId } from '../cli/types.ts';
 import { resolveCli } from '../cli/registry.ts';
+import { userHome } from '../platform.ts';
 
 export const ROSTER_FILE = 'team.json';
 export const ROLE_FILENAME = 'role.md';
@@ -58,7 +58,7 @@ export const ROLE_FILENAME = 'role.md';
  */
 export function hackeroomHome(): string {
   const override = process.env.HACKEROOM_HOME;
-  return override ? resolve(override) : join(homedir(), '.hackeroom');
+  return override ? resolve(override) : join(userHome(), '.hackeroom');
 }
 
 export function rosterPath(): string {

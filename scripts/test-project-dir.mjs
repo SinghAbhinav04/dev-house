@@ -31,9 +31,13 @@ mkdirSync(join(builds, '.manual'), { recursive: true });
 mkdirSync(outside, { recursive: true });
 writeFileSync(join(builds, 'a-file'), 'not a directory');
 writeFileSync(join(outside, 'pipeline-pending.json'), '{"approved":null}');
-symlinkSync(outside, join(builds, 'link-out'));
-symlinkSync(project, join(builds, 'link-in'));
-symlinkSync(project, join(outside, 'link-to-project'));
+// Junctions on Windows: a directory symlink there needs admin rights or
+// developer mode, a junction does not, and both resolve through realpath the
+// same way, which is what is under test.
+const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+symlinkSync(outside, join(builds, 'link-out'), linkType);
+symlinkSync(project, join(builds, 'link-in'), linkType);
+symlinkSync(project, join(outside, 'link-to-project'), linkType);
 
 try {
   assert.equal(buildsDir(), builds, 'the builds directory follows HOME');

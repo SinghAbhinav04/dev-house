@@ -20,6 +20,12 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { resolveCommand } from '../platform.ts';
+
+/** `opencode` is an npm .cmd shim on Windows; see resolveCommand. */
+function opencodeCommand() {
+  return resolveCommand('opencode');
+}
 
 export function opencodeAuthPath(): string {
   const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
@@ -92,7 +98,7 @@ export function opencodeProviders(): ProviderView[] {
 
   const byProvider = new Map<string, { id: string; label: string }[]>();
   try {
-    const out = execFileSync('opencode', ['models'], { encoding: 'utf8', timeout: 30_000 });
+    const out = execFileSync(opencodeCommand().command, [...opencodeCommand().prefixArgs, 'models'], { encoding: 'utf8', timeout: 30_000 });
     for (const line of out.split('\n')) {
       const id = line.trim();
       if (!id.includes('/')) continue;

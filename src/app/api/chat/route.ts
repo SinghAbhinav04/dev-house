@@ -1,6 +1,5 @@
 import { readFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
-import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { NextRequest, NextResponse } from 'next/server';
 import {
@@ -11,6 +10,7 @@ import {
 } from '../../../../pipeline/runner.ts';
 import { EMPTY_RUNTIME } from '@/lib/pipeline-runtime';
 import { getStagingState, idleStatusForRoster } from '@/lib/staging';
+import { buildsDir } from '@/lib/platform';
 import { writeJsonAtomic } from '@/lib/atomic-write';
 import { readPendingApproval } from '@/lib/pipeline-approval';
 import { buildSupervisorSnapshot, getSupervisorRecommendation } from '@/lib/pipeline-supervisor';
@@ -45,7 +45,7 @@ import {
 } from '@/lib/team/usage';
 
 const BUILDUI_DIR = resolve(process.cwd(), 'pipeline');
-const BUILDS_DIR = join(homedir(), 'Builds');
+const BUILDS_DIR = buildsDir();
 const STAGING_DIR = join(BUILDS_DIR, '.staging');
 const MANUAL_DIR = join(BUILDS_DIR, '.manual');
 /**

@@ -19,7 +19,6 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, copyFileSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import {
   clearApprovedBashGrant,
@@ -89,11 +88,13 @@ import {
   type UsageBreakdown,
 } from '../src/lib/team/usage.ts';
 import { SLOT_LABELS, type SlotId, type TeamMember } from '../src/lib/team/types.ts';
+import { buildsDir, makeExecutable, openPath } from '../src/lib/platform.ts';
+import { RUN_TOKEN_ENV, startHeartbeat } from '../src/lib/orchestrator-liveness.ts';
 
 // ── Config ──────────────────────────────────────────────────────────
 
 const BUILDUI_DIR = resolve(import.meta.dirname || __dirname);
-const BUILDS_DIR = join(homedir(), 'Builds');
+const BUILDS_DIR = buildsDir();
 
 /**
  * The team roster. Loaded once at startup: who fills which slot, what model
@@ -457,11 +458,14 @@ copyFileSync(
   join(projectDir, '.claude', 'settings.json')
 );
 copyFileSync(
-  join(BUILDUI_DIR, '.claude', 'hooks', 'approval-gate.sh'),
-  join(projectDir, '.claude', 'hooks', 'approval-gate.sh')
+  join(BUILDUI_DIR, '.claude', 'hooks', 'approval-gate.mjs'),
+  join(projectDir, '.claude', 'hooks', 'approval-gate.mjs')
 );
-// Ensure executable
-try { execFileSync('chmod', ['+x', join(projectDir, '.claude', 'hooks', 'approval-gate.sh')]); } catch {}
+makeExecutable(join(projectDir, '.claude', 'hooks', 'approval-gate.mjs'));
+
+// Tell the server this process is still the run it started. Stop reads this
+// before signalling anything; see src/lib/orchestrator-liveness.ts.
+startHeartbeat(projectDir, process.env[RUN_TOKEN_ENV] || '');
 
 // The hook resolves member capabilities from this manifest. Written by the
 // orchestrator, never by an agent — .claude/ is unwritable from inside a run.
@@ -807,7 +811,7 @@ function clearActiveTurn(agent: string) {
 // Role discipline is enforced by the PreToolUse hook, which reads each
 // member's capabilities from <project>/.claude/team-manifest.json — written
 // by writeTeamManifest() at run start. Nothing here grants permissions; see
-// pipeline/.claude/hooks/approval-gate.sh for the clamps that always apply.
+// pipeline/.claude/hooks/approval-gate.mjs for the clamps that always apply.
 //
 
 // ── Streaming Claude Runner ─────────────────────────────────────────
@@ -2017,7 +2021,7 @@ async function runDeployStep(aSession: string): Promise<string> {
     const files = readdirSync(projectDir);
     const htmlFile = files.find((file) => file === 'index.html') || files.find((file) => file.endsWith('.html'));
     if (htmlFile) {
-      execFileSync('open', [join(projectDir, htmlFile)]);
+      openPath(join(projectDir, htmlFile));
       emit('system', 'complete', 'status', `Opened ${htmlFile}`);
     }
   } catch {}

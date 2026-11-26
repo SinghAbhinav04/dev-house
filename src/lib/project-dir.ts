@@ -9,12 +9,13 @@
  */
 
 import { realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+
+import { buildsDir as platformBuildsDir } from './platform.ts';
 
 /** Read at call time, not at import, so a test can point HOME somewhere else. */
 export function buildsDir(): string {
-  return join(homedir(), 'Builds');
+  return platformBuildsDir();
 }
 
 /**

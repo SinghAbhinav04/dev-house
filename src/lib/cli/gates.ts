@@ -7,8 +7,8 @@
  * through each gate that *must* be refused and checks that it was.
  *
  * An existence check would not be enough. The failures that matter here are
- * quiet ones: a shim whose executable bit was lost, a missing `jq`, a wrong
- * argument key that makes the gate read an empty path. All of those look
+ * quiet ones: a shim whose executable bit was lost, a gate file missing from
+ * the build, a wrong argument key that makes the gate read an empty path. All of those look
  * exactly like a working installation until a member writes somewhere it
  * should not have been able to.
  *
@@ -18,8 +18,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { makeExecutable } from '../platform.ts';
 
 import type { AgentCli, CliId } from './types.ts';
 
@@ -62,21 +64,35 @@ function invokeGate(
   probe: GateProbe,
   env: NodeJS.ProcessEnv,
   cwd: string,
-  interpreter: 'bash' | 'node' = 'bash'
 ) {
   try {
-    const stdout = execFileSync(interpreter, [script], {
+    // Every gate is a node script, run with this very node binary, so no bash,
+    // jq or PATH lookup stands between a member and its rules.
+    const stdout = execFileSync(process.execPath, [script], {
       input: JSON.stringify(probe.payload),
       encoding: 'utf8',
       cwd,
       env,
       timeout: 20_000,
+      windowsHide: true,
     });
     return { stdout, status: 0 };
   } catch (err) {
     const failure = err as { stdout?: string; status?: number; message?: string };
     return { stdout: failure.stdout ?? '', status: failure.status ?? null, message: failure.message };
   }
+}
+
+/**
+ * What agy runs for each tool call.
+ *
+ * On POSIX the shim is executable with a node shebang, so its path is the
+ * whole command, as before. Windows cannot execute a .mjs by path, so there
+ * the command names this node binary and the shim, each quoted.
+ */
+export function antigravityHookCommand(shim: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return shim;
+  return `"${process.execPath}" "${shim}"`;
 }
 
 /** The Antigravity shim's own dialect: a refusal is JSON on stdout. */
@@ -106,17 +122,22 @@ function installAntigravityGate(projectDir: string, pipelineDir: string, memberI
   };
 
   const hooksDir = join(projectDir, '.claude', 'hooks');
-  const shim = join(hooksDir, 'gate-antigravity.sh');
-  const source = join(hookSourceDir(pipelineDir), 'gate-antigravity.sh');
+  const shim = join(hooksDir, 'gate-antigravity.mjs');
+  const source = join(hookSourceDir(pipelineDir), 'gate-antigravity.mjs');
+  const gate = join(hooksDir, 'approval-gate.mjs');
+  const gateSource = join(hookSourceDir(pipelineDir), 'approval-gate.mjs');
 
   if (!existsSync(source)) fail('shim present', `${source} is missing from this build`);
+  if (!existsSync(gateSource)) fail('gate present', `${gateSource} is missing from this build`);
 
   // Rewritten from the build every run, not patched if absent. That is a
   // defence as well as a convenience: a shim a member somehow altered is
   // replaced before the next run rather than being trusted because it exists.
   mkdirSync(hooksDir, { recursive: true });
   copyFileSync(source, shim);
-  chmodSync(shim, 0o755);
+  copyFileSync(gateSource, gate);
+  makeExecutable(shim);
+  makeExecutable(gate);
 
   mkdirSync(join(projectDir, '.agents'), { recursive: true });
   writeFileSync(
@@ -126,7 +147,7 @@ function installAntigravityGate(projectDir: string, pipelineDir: string, memberI
         hackeroom: {
           // "" and "*" both mean every tool. Without a catch-all there would be
           // no deny-by-default, and this CLI could not be supported at all.
-          PreToolUse: [{ matcher: '*', hooks: [{ command: shim, timeout: 30 }] }],
+          PreToolUse: [{ matcher: '*', hooks: [{ command: antigravityHookCommand(shim), timeout: 30 }] }],
         },
       },
       null,
@@ -135,13 +156,7 @@ function installAntigravityGate(projectDir: string, pipelineDir: string, memberI
   );
 
   try {
-    execFileSync('jq', ['--version'], { stdio: 'ignore' });
-  } catch {
-    fail('jq available', 'the shim cannot translate anything without jq');
-  }
-
-  try {
-    execFileSync('bash', ['-n', shim], { stdio: 'ignore' });
+    execFileSync(process.execPath, ['--check', shim], { stdio: 'ignore', windowsHide: true });
   } catch (err) {
     fail('shim parses', (err as Error).message);
   }
@@ -166,7 +181,7 @@ function installAntigravityGate(projectDir: string, pipelineDir: string, memberI
   // so this failing open is exactly the outcome the self-test exists to catch.
   run(
     'refuses a write to its own hooks',
-    antigravityProbe('write_to_file', { TargetFile: join(projectDir, '.claude', 'hooks', 'approval-gate.sh') }),
+    antigravityProbe('write_to_file', { TargetFile: join(projectDir, '.claude', 'hooks', 'approval-gate.mjs') }),
     true
   );
 
@@ -224,12 +239,17 @@ function installOpencodeGate(projectDir: string, pipelineDir: string, memberId: 
   const hooksDir = join(projectDir, '.claude', 'hooks');
   const shim = join(hooksDir, 'gate-opencode.mjs');
   const source = join(hookSourceDir(pipelineDir), 'gate-opencode.mjs');
+  const gate = join(hooksDir, 'approval-gate.mjs');
+  const gateSource = join(hookSourceDir(pipelineDir), 'approval-gate.mjs');
 
   if (!existsSync(source)) fail('shim present', `${source} is missing from this build`);
+  if (!existsSync(gateSource)) fail('gate present', `${gateSource} is missing from this build`);
 
   mkdirSync(hooksDir, { recursive: true });
   copyFileSync(source, shim);
-  chmodSync(shim, 0o755);
+  copyFileSync(gateSource, gate);
+  makeExecutable(shim);
+  makeExecutable(gate);
 
   // The plugin is a thin caller; the rules live in the shim, which lives in
   // .claude/ where no member can write.
@@ -246,10 +266,11 @@ export const HackeroomGate = async () => ({
   "tool.execute.before": async (input, output) => {
     let verdict;
     try {
-      const answer = execFileSync("node", [${JSON.stringify(shim)}], {
+      const answer = execFileSync(${JSON.stringify(process.execPath)}, [${JSON.stringify(shim)}], {
         input: JSON.stringify({ tool: input.tool, args: output?.args ?? {}, cwd: ${JSON.stringify(projectDir)} }),
         encoding: "utf8",
         timeout: 30000,
+        windowsHide: true,
       });
       verdict = JSON.parse(answer);
     } catch (err) {
@@ -272,7 +293,7 @@ export const HackeroomGate = async () => ({
   const env = { ...process.env, PIPELINE_AGENT: memberId, PIPELINE_SECURITY_MODE: 'fast' };
 
   const run = (check: string, probe: GateProbe, expectDenial: boolean) => {
-    const result = invokeGate(shim, probe, env, projectDir, 'node');
+    const result = invokeGate(shim, probe, env, projectDir);
     const denied = probe.isDenial(result.stdout, result.status);
     if (denied === expectDenial) return;
     fail(
@@ -285,7 +306,7 @@ export const HackeroomGate = async () => ({
 
   run(
     'refuses a write to its own hooks',
-    opencodeProbe('write', { filePath: join(projectDir, '.claude', 'hooks', 'approval-gate.sh') }),
+    opencodeProbe('write', { filePath: join(projectDir, '.claude', 'hooks', 'approval-gate.mjs') }),
     true
   );
   run('permits an ordinary read', opencodeProbe('read', { filePath: join(projectDir, 'plan.md') }), false);
