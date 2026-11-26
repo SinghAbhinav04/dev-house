@@ -74,6 +74,16 @@ on the same machine.
   with its content until every other panel, the supervisor's chat box included,
   had no height. The grid now declares as many rows as its workers need, the
   supervisor is pinned to the first column and the audit panel to the last.
+- **A member can write into a directory that does not exist yet.** The gate
+  resolved a path through its parent directory and refused the write as
+  "Invalid file path" when that directory was missing, although Write creates
+  missing parents itself. A coder asked for `public/js/app.js` in a new project
+  could only get there by running `mkdir -p` through Bash first, which in
+  strict mode cost the user an approval for each directory. The gate now
+  resolves the nearest ancestor that exists and keeps the rest as written.
+  It still refuses a path through anything that exists without being a
+  directory (a file, a dangling symlink, a symlink to a file) and a `.` or
+  `..` among the missing components, and every rule that follows is unchanged.
 
 ### Upgrading
 

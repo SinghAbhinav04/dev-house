@@ -14,7 +14,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +50,29 @@ writeFileSync(join(projectDir, 'plan.md'), '# plan\n');
 writeFileSync(join(projectDir, 'index.html'), '<!doctype html>\n');
 writeFileSync(join(projectDir, '.claude', 'settings.json'), '{}\n');
 writeFileSync(join(siblingDir, 'other.txt'), 'hello\n');
+
+// Things a path can run into on its way to a directory that does not exist
+// yet: a directory outside ~/Builds, and symlinks inside the project that
+// lead out of it, nowhere, or to a file.
+//
+// Windows hands out junctions freely but wants a privilege (or Developer
+// Mode) for a true symlink, so the three links that stand for directories are
+// junctions there; the type is ignored on every other platform. A link to a
+// file has no such form: where it cannot be made, its one case is skipped,
+// and says so.
+const outsideDir = join(tempHome, 'outside');
+mkdirSync(outsideDir, { recursive: true });
+symlinkSync(outsideDir, join(projectDir, 'outlink'), 'junction');
+symlinkSync(siblingDir, join(projectDir, 'siblink'), 'junction');
+symlinkSync(join(tempHome, 'nowhere'), join(projectDir, 'dangling'), 'junction');
+let fileLinkMade = true;
+try {
+  symlinkSync(join(projectDir, 'index.html'), join(projectDir, 'filelink'), 'file');
+} catch (error) {
+  if (process.platform !== 'win32' || error?.code !== 'EPERM') throw error;
+  fileLinkMade = false;
+  console.warn('*** SKIP "nor is a symlink to a file": this Windows account cannot create symlinks');
+}
 
 /**
  * A deliberately un-alphabetic roster: nothing here would pass the old
@@ -365,6 +388,128 @@ const checks = [
     name: 'supervisor cannot write outside ~/Builds',
     expect: 'deny',
     run: () => invokeHook({ agent: 'sam', toolName: 'Write', toolInput: { file_path: join(tempHome, 'escape.txt'), content: 'nope' } }),
+  },
+
+  // ── Directories that do not exist yet ──────────────────────────────
+  //
+  // Write creates missing parents, so a path into a new directory is an
+  // ordinary one. The gate used to refuse them all as "Invalid file path",
+  // which also happened to be what kept some of the refusals below true. Now
+  // the nearest existing ancestor is resolved and every rule has to hold on
+  // its own.
+  {
+    name: 'a coder can write into a directory that does not exist yet',
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'public/js/app.js', content: 'x' } }),
+  },
+  {
+    name: 'the same by absolute path',
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: join(projectDir, 'public', 'js', 'dates.js'), content: 'x' } }),
+  },
+  {
+    name: 'several new directories deep',
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'a/b/c/d/e.txt', content: 'x' } }),
+  },
+  {
+    name: 'a new directory under one that exists',
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'src/components/New.tsx', content: 'x' } }),
+  },
+  {
+    name: 'the supervisor can do the same in a sibling project',
+    expect: 'allow',
+    run: () => invokeHook({ agent: 'sam', toolName: 'Write', toolInput: { file_path: join(siblingDir, 'docs', 'new', 'x.md'), content: 'x' } }),
+  },
+  {
+    name: 'a new directory is still jailed: not in a sibling project',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: join(siblingDir, 'newdir', 'x.txt'), content: 'x' } }),
+  },
+  {
+    name: 'nor outside ~/Builds, for the supervisor',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'sam', toolName: 'Write', toolInput: { file_path: join(tempHome, 'newdir', 'escape.txt'), content: 'x' } }),
+  },
+  {
+    name: 'nor under .claude/',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: '.claude/newhooks/x.sh', content: 'x' } }),
+  },
+  {
+    name: 'a config directory that does not exist yet cannot be created: .opencode/',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: '.opencode/agent/x.md', content: 'x' } }),
+  },
+  {
+    name: 'nor .agents/',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: '.agents/hooks.json', content: 'x' } }),
+  },
+  {
+    name: 'nor .gemini/',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: '.gemini/settings.json', content: 'x' } }),
+  },
+  {
+    name: 'nor a .claude/ further down a new path',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'newdir/.claude/settings.json', content: 'x' } }),
+  },
+  {
+    name: 'a file cannot be used as a directory',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'index.html/x.js', content: 'x' } }),
+  },
+  {
+    name: 'a symlink out of ~/Builds is followed before the new part is added',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'outlink/newdir/x.js', content: 'x' } }),
+  },
+  {
+    name: 'and one into a sibling project',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'siblink/newdir/x.js', content: 'x' } }),
+  },
+  {
+    name: 'a dangling symlink is not a missing directory',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'dangling/x.js', content: 'x' } }),
+  },
+  ...(fileLinkMade
+    ? [
+        {
+          name: 'nor is a symlink to a file',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'filelink/x.js', content: 'x' } }),
+        },
+      ]
+    : []),
+  {
+    name: 'a . among the missing directories is refused',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'newdir/./x.js', content: 'x' } }),
+  },
+  {
+    name: 'a .. is refused as it always was',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'newdir/../../sibling-project/x.txt', content: 'x' } }),
+  },
+  {
+    name: 'a member that cannot write cannot write into a new directory either',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'rex', toolName: 'Write', toolInput: { file_path: 'notes/x.md', content: 'x' } }),
+  },
+  {
+    name: 'the planner still owns only its artifact',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'pat', toolName: 'Write', toolInput: { file_path: 'docs/plan-2.md', content: 'x' } }),
+  },
+  {
+    name: 'the memory inbox still takes no subdirectories, new ones included',
+    expect: 'deny',
+    run: () => invokeHook({ agent: 'rex', toolName: 'Write', toolInput: { file_path: join(memoryInbox, 'newsub', 'x.md'), content: 'x' } }),
   },
   {
     name: 'project-write member cannot touch .claude/',

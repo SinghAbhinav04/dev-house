@@ -51,9 +51,9 @@
 // via indirect execution (python3 -c, eval, base64). For true isolation, use
 // OS-level sandboxing. See SECURITY.md.
 
-import { existsSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -126,6 +126,20 @@ function isDir(path) {
   }
 }
 
+/**
+ * True only when nothing at all is at this path. A dangling symlink is
+ * something (lstat sees the link), and so is anything lstat cannot examine:
+ * an error other than "not there" is not evidence of absence.
+ */
+function isAbsent(path) {
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error) {
+    return error?.code === 'ENOENT' || error?.code === 'ENOTDIR';
+  }
+}
+
 function findProjectRoot(cwd) {
   let check = resolve(cwd);
   const { root } = parse(check);
@@ -140,13 +154,36 @@ function findProjectRoot(cwd) {
 
 /** Absolute, symlink-resolved path, or null when it cannot be trusted. */
 function resolveFilePath(filePath, cwd) {
-  let fp = filePath;
-  if (!isAbsolute(fp)) fp = join(cwd, fp);
+  // Joined by hand: join() would normalise a "." away before the loop below
+  // can see it.
+  let fp = isAbsolute(filePath) ? filePath : `${cwd}${sep}${filePath}`;
   // Reject .. anywhere, before normalisation can hide it.
   if (fp.includes('..')) return null;
-  const dir = dirname(fp);
-  if (!isDir(dir)) return null;
-  fp = join(realOr(dir), basename(fp));
+  // Resolve directory symlinks.
+  //
+  // The directory does not have to exist yet: Write creates missing parents,
+  // and a coder asked for public/js/app.js in a new project was being refused
+  // here as an "invalid path". So climb to the nearest ancestor that does
+  // exist, resolve that, and keep the rest as written - a component that does
+  // not exist cannot be a symlink, so there is nothing in it to resolve.
+  //
+  // Only a component that is truly absent is climbed past. One that exists
+  // without being a directory (a file, a dangling symlink, a symlink to a
+  // file) is refused, as is a "." among the missing ones: neither is a path
+  // anything should be created under, and the rules after this match on the
+  // text.
+  let dir = dirname(fp);
+  const missing = [];
+  while (!isDir(dir)) {
+    if (!isAbsent(dir)) return null;
+    const part = basename(dir);
+    const parent = dirname(dir);
+    // parent === dir is a root that is not there (a Windows drive, say).
+    if (part === '' || part === '.' || parent === dir) return null;
+    missing.unshift(part);
+    dir = parent;
+  }
+  fp = join(realOr(dir), ...missing, basename(fp));
   // File-level symlinks. (Hardlinks are not detected — known limitation.)
   if (existsSync(fp)) fp = realOr(fp);
   return fp;
