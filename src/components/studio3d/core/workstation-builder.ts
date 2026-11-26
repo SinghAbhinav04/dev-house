@@ -28,7 +28,6 @@ export interface WorkstationsResult {
   commanderScreenMesh: THREE.Mesh;
   whiteboardPos: THREE.Vector3;
   obstacles: AABB[];
-  setActiveFloor: (floorNum: number) => void;
   updateStatus: (slot: SlotId, status: string, timeSec: number, speech?: string | null) => void;
   /** Draw the run's board on the commander desk's screen. */
   updateCommanderBoard: (title: string, columns: CommanderBoardColumn[]) => void;
@@ -36,12 +35,6 @@ export interface WorkstationsResult {
   dispose: () => void;
 }
 
-/**
- * Workstation assignments across the building's active floors:
- * - 2F (Dev House Engineering Studio): ALL 6 DEVELOPERS + Commander Desk ("My Computer")
- * - 1F (Ground Atrium): Reception Desk & Lounge
- * - 3F (Sky Suite): Expansion Suite (Under Construction / Coming Soon)
- */
 /** What the studio whiteboard shows: the user's brief and the planner's plan. */
 export interface WhiteboardContent {
   brief?: string;
@@ -51,7 +44,7 @@ export interface WhiteboardContent {
 }
 
 export const WORKSTATION_CONFIGS: Array<WorkstationDef & { floorNumber: number }> = [
-  // 2F Dev House Engineering Floor - WHOLE TEAM TOGETHER (Pixel-accurate tight collision bounds)
+  // The whole team in one room (tight collision bounds)
   {
     slot: 'coder',
     label: 'Coder',
@@ -361,48 +354,7 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
     });
   });
 
-  // --- Floor 1: Ground Atrium Reception & Coffee Lounge ---
-  const loungeGroup = new THREE.Group();
-  loungeGroup.name = 'GroundLounge';
-  loungeGroup.userData = { floorNumber: 1 };
-  loungeGroup.position.set(0, 0, -1.8);
-
-  const couchBaseGeom = new THREE.BoxGeometry(3.2, 0.4, 1.1);
-  const couchBackGeom = new THREE.BoxGeometry(3.2, 0.6, 0.3);
-  const coffeeTableGeom = new THREE.BoxGeometry(1.6, 0.3, 0.8);
-  geometries.push(couchBaseGeom, couchBackGeom, coffeeTableGeom);
-
-  const leatherCouchMat = textureCache.getMaterial('mat:leather_couch', () =>
-    new THREE.MeshStandardMaterial({ color: '#38251a', roughness: 0.8 })
-  );
-
-  const couchBase = new THREE.Mesh(couchBaseGeom, leatherCouchMat);
-  couchBase.position.y = 0.25;
-  loungeGroup.add(couchBase);
-
-  const couchBack = new THREE.Mesh(couchBackGeom, leatherCouchMat);
-  couchBack.position.set(0, 0.65, -0.4);
-  loungeGroup.add(couchBack);
-
-  const coffeeTable = new THREE.Mesh(coffeeTableGeom, walnutWoodMat);
-  coffeeTable.position.set(0, 0.18, 1.1);
-  loungeGroup.add(coffeeTable);
-
-  rootGroup.add(loungeGroup);
-
-  // Reception Desk on Floor 1
-  const recDeskGroup = new THREE.Group();
-  recDeskGroup.name = 'ReceptionDesk';
-  recDeskGroup.userData = { floorNumber: 1 };
-  recDeskGroup.position.set(0, 0, 1.6);
-  const recDeskGeom = new THREE.BoxGeometry(2.4, 0.9, 0.9);
-  geometries.push(recDeskGeom);
-  const recDesk = new THREE.Mesh(recDeskGeom, walnutWoodMat);
-  recDesk.position.y = 0.45;
-  recDeskGroup.add(recDesk);
-  rootGroup.add(recDeskGroup);
-
-  // --- Floor 2: Architecture Whiteboard (Positioned at X=-3.2, Z=-4.8 to keep central elevator path clear) ---
+  // --- Whiteboard (X=-3.2, Z=-4.8, by the back wall) ---
   const whiteboardGroup = new THREE.Group();
   whiteboardGroup.name = 'Whiteboard';
   whiteboardGroup.userData = { isWhiteboard: true, floorNumber: 2 };
@@ -626,7 +578,7 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
   const cmdDeskGroup = new THREE.Group();
   cmdDeskGroup.name = 'CommanderDeskGroup';
   cmdDeskGroup.userData = { isCommanderDesk: true, floorNumber: 2 };
-  const cmdDeskPos = new THREE.Vector3(0, 0, 3.6); // Positioned on 2F Dev House Engineering Studio
+  const cmdDeskPos = new THREE.Vector3(0, 0, 3.6);
   cmdDeskGroup.position.copy(cmdDeskPos);
   cmdDeskGroup.rotation.y = Math.PI; // Faces into the office towards the team
 
@@ -723,31 +675,10 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
   // Studio Library Bookcase at (-5.6, 0, -7.18), width 2.4, depth 0.36
   obstacles.push({ minX: -6.82, maxX: -4.38, minZ: -7.38, maxZ: -6.98, label: 'Studio Library Bookcase' });
 
-  // --- Active Floor Visibility Filter ---
-  // Lights are never hidden with their floor, only dimmed: a hidden light
-  // changes the scene's light count, and that recompiles every shader.
+  // The lamp light lives at the room's root, so it is not moved with the desk.
   cmdDeskGroup.updateMatrixWorld(true);
   rootGroup.updateMatrixWorld(true);
   rootGroup.attach(warmLampLight);
-
-  const setActiveFloor = (floorNum: number) => {
-    warmLampLight.intensity = floorNum === 2 ? 1.6 : 0;
-    // Floor 2 hosts the entire engineering team!
-    workstations.forEach((ws) => {
-      ws.group.visible = floorNum === 2;
-    });
-
-    // Floor 2 features: Commander Desk & Whiteboard
-    cmdDeskGroup.visible = floorNum === 2;
-    whiteboardGroup.visible = floorNum === 2;
-
-    // Floor 1 features: Reception & Lounge
-    loungeGroup.visible = floorNum === 1;
-    recDeskGroup.visible = floorNum === 1;
-  };
-
-  // Initialize on Floor 2 (Active Studio Floor with Whole Team)
-  setActiveFloor(2);
 
   const updateStatus = (slot: SlotId, status: string, timeSec: number, speech?: string | null) => {
     const ws = workstations.get(slot);
@@ -787,7 +718,6 @@ export function buildWorkstations(textureCache: TextureCache): WorkstationsResul
     commanderScreenMesh: cmdScreen,
     whiteboardPos,
     obstacles,
-    setActiveFloor,
     updateStatus,
     updateCommanderBoard,
     updateWhiteboardPlan,

@@ -36,8 +36,7 @@ interface WalkingPedestrian {
 /**
  * Exterior City & Nature Scenery.
  * Renders the 3-story Dev House building in a rich environment with an asphalt roadway,
- * animated driving cars, walking pedestrians, lush stylized trees, streetlamps,
- * and a 3F "COMING SOON" expansion banner.
+ * animated driving cars, walking pedestrians, lush stylized trees and streetlamps.
  */
 export function buildExteriorScenery(textureCache: TextureCache): ExteriorSceneryResult {
   const rootGroup = new THREE.Group();
@@ -628,39 +627,6 @@ export function buildExteriorScenery(textureCache: TextureCache): ExteriorScener
     mullion.position.set(mx, bldgH / 2, bldgD / 2 + 0.08);
     exteriorFacadeGroup.add(mullion);
   });
-
-  // I. 3F Architectural Spandrel Plaque: "3F SKY EXPANSION SUITE • COMING SOON" (Clean, No Emojis)
-  const plaqueGeom = new THREE.PlaneGeometry(12.0, 1.4);
-  geometries.push(plaqueGeom);
-
-  const plaqueCanvas = document.createElement('canvas');
-  plaqueCanvas.width = 1024;
-  plaqueCanvas.height = 120;
-  const pCtx = plaqueCanvas.getContext('2d')!;
-
-  pCtx.fillStyle = '#1e1915';
-  pCtx.fillRect(0, 0, 1024, 120);
-  pCtx.strokeStyle = '#d98b4d';
-  pCtx.lineWidth = 3;
-  pCtx.strokeRect(3, 3, 1018, 114);
-
-  pCtx.fillStyle = '#d98b4d';
-  pCtx.font = 'bold 32px monospace';
-  pCtx.textAlign = 'center';
-  pCtx.fillText('3F SKY EXPANSION SUITE • COMING SOON', 512, 52);
-
-  pCtx.fillStyle = '#f4ece2';
-  pCtx.font = '18px monospace';
-  pCtx.fillText('ARCHITECTURAL EXPANSION // NEXT-GEN AGENT LABS', 512, 92);
-
-  const plaqueTex = new THREE.CanvasTexture(plaqueCanvas);
-  plaqueTex.colorSpace = THREE.SRGBColorSpace;
-  const plaqueMat = new THREE.MeshBasicMaterial({ map: plaqueTex });
-  materials.push(plaqueMat);
-
-  const plaqueMesh = new THREE.Mesh(plaqueGeom, plaqueMat);
-  plaqueMesh.position.set(0, 8.4, bldgD / 2 + 0.28);
-  exteriorFacadeGroup.add(plaqueMesh);
 
   // J. Roof Parapet Architectural Sign: "DEV HOUSE STUDIO" (Clean, No Emojis, No Stars)
   const roofSignCanvas = document.createElement('canvas');

@@ -202,7 +202,7 @@ export function createWorkstationScreen(slot: SlotId, screenIndex: 0 | 1): Scree
         const tests = [
           '✓ e2e/room-lighting.spec.ts (112ms)',
           '✓ unit/collision-bounds.test.ts (14ms)',
-          '✓ unit/elevator-transit.test.ts (22ms)',
+          '✓ unit/ticket-branch.test.ts (22ms)',
           '✓ integration/coffee-speed-buff.test.ts (18ms)',
           '✓ integration/air-conditioner.test.ts (26ms)',
           '✓ perf/fps-stability-60fps.test.ts (8ms)',
@@ -343,7 +343,7 @@ export function createWorkstationScreen(slot: SlotId, screenIndex: 0 | 1): Scree
           { text: '# Dev House 3D Architecture Plan', color: '#d98b4d' },
           { text: '## 1. Single Active Floor Layout', color: '#7fa8a0' },
           { text: '  [x] Render room at y=0 plane (no clipping)', color: '#8fae60' },
-          { text: '  [x] Motorized sliding elevator doors', color: '#8fae60' },
+          { text: '  [x] A branch and a review per ticket', color: '#8fae60' },
           { text: '## 2. Realistic Studio Lighting', color: '#7fa8a0' },
           { text: '  [x] High-lumen warm ceiling downlights', color: '#8fae60' },
           { text: '  [x] Studio ambient fill & key illumination', color: '#8fae60' },
@@ -558,7 +558,7 @@ export function createWorkstationScreen(slot: SlotId, screenIndex: 0 | 1): Scree
 }
 
 /**
- * Creates the Ultrawide Curved Monitor texture for Commander Desk ("My Computer" on 3F).
+ * Creates the Ultrawide Curved Monitor texture for Commander Desk ("My Computer").
  */
 /** One column of the board as the commander screen shows it. */
 export interface CommanderBoardColumn {

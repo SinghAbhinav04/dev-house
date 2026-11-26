@@ -8,7 +8,7 @@ import type { SlotId } from '@/lib/team/types';
 import { SLOT_LABELS } from '@/lib/team/types';
 import { createStarfield } from './core/starfield';
 import { buildFloatingIsland } from './core/island-builder';
-import { buildStudioArchitecture, DEV_HOUSE_FLOORS } from './core/studio-architecture';
+import { buildStudioArchitecture } from './core/studio-architecture';
 import { buildWorkstations, WORKSTATION_CONFIGS, type WhiteboardContent } from './core/workstation-builder';
 
 export type { WhiteboardContent };
@@ -117,8 +117,6 @@ export function StudioCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Active Floor & Room States for HUD (Default to Floor 2 - The Whole Team Floor!)
-  const [currentFloorNum, setCurrentFloorNum] = useState<number>(2);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [caffeineRemaining, setCaffeineRemaining] = useState<number>(0);
@@ -135,7 +133,6 @@ export function StudioCanvas({
   const targetAgentIdRef = useRef<string | null>(null);
 
   // Trigger handlers into Three.js scene (zero remounts!)
-  const elevatorRideTriggerRef = useRef<((floorNum: number) => void) | null>(null);
   const featureActionTriggerRef = useRef<((feature: 'lights' | 'ac' | 'coffeeMachine' | 'coffeeCup' | 'whiteboard') => void) | null>(null);
   const timeModeTriggerRef = useRef<((mode: TimeOfDayMode) => void) | null>(null);
   const updateWhiteboardTriggerRef = useRef<((content: WhiteboardContent) => void) | null>(null);
@@ -265,10 +262,6 @@ export function StudioCanvas({
     if (slot) inspectSlot(slot);
   }, [inspectSlot]);
 
-  // Elevator Floor Ride trigger from HUD
-  const handleElevatorRide = useCallback((floorNum: number) => {
-    elevatorRideTriggerRef.current?.(floorNum);
-  }, []);
 
   // MOUNT ONCE: Main Three.js Scene Setup & Game Loop
   useEffect(() => {
@@ -488,21 +481,6 @@ export function StudioCanvas({
     destinationRing.position.y = playerPos.y + 0.03;
     scene.add(destinationRing);
 
-    // Elevator Door Transit Animation State (Floor 2 is active)
-    let activeFloor = 2;
-    let targetFloor: number | null = null;
-    let liftState: 'idle' | 'closing' | 'opening' = 'idle';
-    let liftDoorsRatio = 1.0;
-
-    const requestElevatorRide = (floorNum: number) => {
-      if (floorNum === activeFloor || liftState !== 'idle') return;
-      targetFloor = floorNum;
-      liftState = 'closing';
-      showToastRef.current(`Elevator: Calling Floor ${floorNum}F...`);
-    };
-
-    elevatorRideTriggerRef.current = requestElevatorRide;
-
     // Feature action execution helper
     const triggerFeatureAction = (feature: 'lights' | 'ac' | 'coffeeMachine' | 'coffeeCup' | 'whiteboard') => {
       if (feature === 'lights') {
@@ -528,7 +506,7 @@ export function StudioCanvas({
 
     featureActionTriggerRef.current = triggerFeatureAction;
 
-    // Keyboard controls with Sprint modifier and Floor numbers 1-3
+    // Keyboard controls with Sprint modifier
     const keys = { up: false, down: false, left: false, right: false, sprint: false };
     const onKeyDown = (e: KeyboardEvent) => {
       if (propsRef.current.paused) return;
@@ -541,12 +519,6 @@ export function StudioCanvas({
       if (k === 'a' || e.key === 'ArrowLeft' || e.code === 'KeyA') { keys.left = true; e.preventDefault(); }
       if (k === 'd' || e.key === 'ArrowRight' || e.code === 'KeyD') { keys.right = true; e.preventDefault(); }
       if (e.shiftKey || e.code === 'ShiftLeft' || e.code === 'ShiftRight') { keys.sprint = true; }
-
-      // Hotkeys 1 - 3 to command elevator to ride to floors!
-      if (['1', '2', '3'].includes(e.key)) {
-        requestElevatorRide(Number(e.key));
-        e.preventDefault();
-      }
 
       // Press 'E' to interact with Commander Desk, Interactive Room Prop, or nearest dev
       if (k === 'e') {
@@ -659,7 +631,7 @@ export function StudioCanvas({
       }
 
       // Proximity fallback check for Commander Desk (on Floor 2)
-      if (!hitCommander && activeFloor === 2 && playerPos.distanceTo(workstationSystem.commanderDeskPos) < 2.5) {
+      if (!hitCommander && playerPos.distanceTo(workstationSystem.commanderDeskPos) < 2.5) {
         if (intersects.length > 0 && intersects[0].point.distanceTo(workstationSystem.commanderDeskPos) < 2.2) {
           hitCommander = true;
         }
@@ -811,28 +783,6 @@ export function StudioCanvas({
         setCaffeineRemaining(currentCaffeine);
       }
 
-      // Smooth Dynamic Lift Doors & Active Floor Switching
-      if (liftState === 'closing') {
-        liftDoorsRatio = Math.max(0, liftDoorsRatio - delta * 2.8);
-        architecture.setLiftDoors(liftDoorsRatio);
-        if (liftDoorsRatio <= 0 && targetFloor !== null) {
-          activeFloor = targetFloor;
-          architecture.setActiveFloor(activeFloor);
-          workstationSystem.setActiveFloor(activeFloor);
-          setCurrentFloorNum(activeFloor);
-          const fDef = DEV_HOUSE_FLOORS.find((f) => f.floorNumber === activeFloor);
-          showToastRef.current(`Arrived at ${fDef ? fDef.name : `${activeFloor}F`}`);
-          liftState = 'opening';
-        }
-      } else if (liftState === 'opening') {
-        liftDoorsRatio = Math.min(1.0, liftDoorsRatio + delta * 2.8);
-        architecture.setLiftDoors(liftDoorsRatio);
-        if (liftDoorsRatio >= 1.0) {
-          liftState = 'idle';
-          targetFloor = null;
-        }
-      }
-
       // Camera-Relative Movement Vector (Zero-allocation reuse!)
       cameraRig.camera.getWorldDirection(_scratchCamForward);
       _scratchCamForward.y = 0;
@@ -902,7 +852,7 @@ export function StudioCanvas({
         if (Math.abs(resolved.z - nextZ) > 0.0001) {
           playerVelocity.z = 0;
         }
-        const clear = activeFloor === 2 ? stage.pushOut(resolved.x, resolved.z, 0.2) : resolved;
+        const clear = stage.pushOut(resolved.x, resolved.z, 0.2);
         playerPos.x = clear.x;
         playerPos.z = clear.z;
       }
@@ -924,27 +874,22 @@ export function StudioCanvas({
       // Smooth Camera Follow
       cameraRig.update(playerPos, delta);
 
-      // The team: stage directions keep playing on every floor, so the room
-      // is where it should be when you come back; drawn on the studio floor only.
-      actorsGroup.visible = activeFloor === 2;
       stage.update(delta, performance.now(), pullDirection, isTypingAt, playerPos);
-      if (activeFloor === 2) {
-        WORKSTATION_CONFIGS.forEach((config) => {
-          const occupant = currentProps.seats[config.slot];
-          const status = occupant ? currentProps.agentStatus[occupant.agentId] || 'idle' : 'idle';
-          const speech = occupant ? currentProps.latestSpeech[occupant.agentId] : null;
-          const devChar = devCharacters.get(config.slot);
-          if (devChar && occupant?.color && lastColor.get(config.slot) !== occupant.color) {
-            lastColor.set(config.slot, occupant.color);
-            devChar.setColor(occupant.color);
-          }
-          if (occupant) {
-            const member = currentProps.members.find((m) => m.id === occupant.agentId);
-            if (member) stage.setMemberName(config.slot, member.name);
-          }
-          workstationSystem.updateStatus(config.slot, status, timeSec, speech);
-        });
-      }
+      WORKSTATION_CONFIGS.forEach((config) => {
+        const occupant = currentProps.seats[config.slot];
+        const status = occupant ? currentProps.agentStatus[occupant.agentId] || 'idle' : 'idle';
+        const speech = occupant ? currentProps.latestSpeech[occupant.agentId] : null;
+        const devChar = devCharacters.get(config.slot);
+        if (devChar && occupant?.color && lastColor.get(config.slot) !== occupant.color) {
+          lastColor.set(config.slot, occupant.color);
+          devChar.setColor(occupant.color);
+        }
+        if (occupant) {
+          const member = currentProps.members.find((m) => m.id === occupant.agentId);
+          if (member) stage.setMemberName(config.slot, member.name);
+        }
+        workstationSystem.updateStatus(config.slot, status, timeSec, speech);
+      });
 
       // --- One interaction target: the nearest thing within reach. The one
       // prompt shows exactly what E, or a click on it, will do. ---
@@ -977,10 +922,8 @@ export function StudioCanvas({
         pickY = anchorY;
       };
 
-      if (activeFloor === 2) {
-        consider('cmd', playerPos.distanceTo(workstationSystem.commanderDeskPos), 2.5, workstationSystem.commanderDeskPos, 1.8, 'Open My Computer', 'Ticket board · team · pipeline');
-        consider('feature', playerPos.distanceTo(workstationSystem.whiteboardPos), 2.8, workstationSystem.whiteboardPos, 1.9, 'Studio Whiteboard', 'Write the brief · see the plan', 'whiteboard');
-      }
+      consider('cmd', playerPos.distanceTo(workstationSystem.commanderDeskPos), 2.5, workstationSystem.commanderDeskPos, 1.8, 'Open My Computer', 'Ticket board · team · pipeline');
+      consider('feature', playerPos.distanceTo(workstationSystem.whiteboardPos), 2.8, workstationSystem.whiteboardPos, 1.9, 'Studio Whiteboard', 'Write the brief · see the plan', 'whiteboard');
       if (roomFeatures.hasBrewedCup) {
         consider('feature', playerPos.distanceTo(roomFeatures.coffeePos), 2.5, roomFeatures.coffeePos, 1.2, 'Drink Fresh Espresso', '+40% Sprint Boost (45s)', 'coffeeCup');
       } else {
@@ -996,30 +939,28 @@ export function StudioCanvas({
       // Teammates, measured from where they are now (desk or not), and the
       // labels over their heads.
       labelItems.length = 0;
-      if (activeFloor === 2) {
-        for (const config of WORKSTATION_CONFIGS) {
-          const view = stage.view(config.slot);
-          const occupant = currentProps.seats[config.slot];
-          if (!view || !occupant) continue;
-          const member = currentProps.members.find((m) => m.id === occupant.agentId);
-          const name = member?.name || occupant.name || config.label;
-          const headY = view.seated ? 1.55 : 1.95;
-          _scratchDeskPos.set(view.x, 0, view.z);
-          consider('agent', Math.hypot(playerPos.x - view.x, playerPos.z - view.z), INTERACTION_RADIUS, _scratchDeskPos, headY + 0.35,
-            `Talk to ${name}`, view.seated ? SLOT_LABELS[config.slot] || config.label : view.activity, null, occupant.agentId);
-          let item = labelPool.get(config.slot);
-          if (!item) {
-            item = { key: config.slot, name, color: '#d98b4d', say: null, x: 0, y: 0, z: 0 };
-            labelPool.set(config.slot, item);
-          }
-          item.name = name;
-          item.color = occupant.color || member?.color || '#d98b4d';
-          item.say = view.say;
-          item.x = view.x;
-          item.y = headY;
-          item.z = view.z;
-          labelItems.push(item);
+      for (const config of WORKSTATION_CONFIGS) {
+        const view = stage.view(config.slot);
+        const occupant = currentProps.seats[config.slot];
+        if (!view || !occupant) continue;
+        const member = currentProps.members.find((m) => m.id === occupant.agentId);
+        const name = member?.name || occupant.name || config.label;
+        const headY = view.seated ? 1.55 : 1.95;
+        _scratchDeskPos.set(view.x, 0, view.z);
+        consider('agent', Math.hypot(playerPos.x - view.x, playerPos.z - view.z), INTERACTION_RADIUS, _scratchDeskPos, headY + 0.35,
+          `Talk to ${name}`, view.seated ? SLOT_LABELS[config.slot] || config.label : view.activity, null, occupant.agentId);
+        let item = labelPool.get(config.slot);
+        if (!item) {
+          item = { key: config.slot, name, color: '#d98b4d', say: null, x: 0, y: 0, z: 0 };
+          labelPool.set(config.slot, item);
         }
+        item.name = name;
+        item.color = occupant.color || member?.color || '#d98b4d';
+        item.say = view.say;
+        item.x = view.x;
+        item.y = headY;
+        item.z = view.z;
+        labelItems.push(item);
       }
 
       nearCmdRef.current = pickKind === 'cmd';
@@ -1052,7 +993,7 @@ export function StudioCanvas({
         if (!shown) prompt.style.display = 'none';
       }
 
-      if (cutawayOn && activeFloor === 2) {
+      if (cutawayOn) {
         labelLayer.update(cameraRig.camera, width, height, labelItems, promptRects);
       } else {
         labelLayer.hideAll();
@@ -1101,21 +1042,8 @@ export function StudioCanvas({
       }
     };
 
-    // Warm the GPU for every floor before the first frame.
-    //
-    // A shader program is keyed by the lights in view, and each floor shows a
-    // different set (desk lamps on 2F, the work light on 3F, …). compile() only
-    // sees the lights of the floor currently shown, so the first elevator ride
-    // to 1F or 3F used to recompile every material in the scene on the spot: a
-    // measured 6.4 s freeze. Compile each floor's light set once, here, without
-    // blocking (KHR_parallel_shader_compile), and upload every texture too.
-    for (const floor of [1, 3]) {
-      architecture.setActiveFloor(floor);
-      workstationSystem.setActiveFloor(floor);
-      void renderer.compileAsync(scene, cameraRig.camera).catch(() => {});
-    }
-    architecture.setActiveFloor(activeFloor);
-    workstationSystem.setActiveFloor(activeFloor);
+    // Compile every shader and upload every texture before the first frame,
+    // so nothing stalls the moment it first comes into view.
     renderer.compile(scene, cameraRig.camera);
     scene.traverse((object) => {
       const material = (object as THREE.Mesh).material;
@@ -1157,8 +1085,6 @@ export function StudioCanvas({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const currentFloorDef = DEV_HOUSE_FLOORS.find((f) => f.floorNumber === currentFloorNum) || DEV_HOUSE_FLOORS[1];
 
   return (
     <div ref={containerRef} className="relative h-full w-full select-none overflow-hidden bg-[#0a0807]">
@@ -1219,48 +1145,10 @@ export function StudioCanvas({
         <div className="mx-auto h-0 w-0 border-x-4 border-t-4 border-x-transparent border-t-[#d98b4d]" />
       </div>
 
-      {/* 3-Floor Directory HUD (Elevator Navigator: 1F Lounge, 2F Dev House Active, 3F Coming Soon) */}
-      <div className="pointer-events-auto absolute bottom-3 left-1/2 z-30 -translate-x-1/2 flex items-center gap-1.5 rounded-xl border border-[rgba(244,236,226,0.1)] bg-[#17130f]/92 p-1.5 backdrop-blur-md shadow-2xl">
-        <div className="flex items-center gap-2 px-2.5">
-          <span className="font-mono text-[9px] uppercase tracking-widest text-[#8a7a6b]">
-            Elevator:
-          </span>
-          <span className="font-mono text-[11px] font-bold text-[#f4ece2]">
-            {currentFloorDef.name}
-          </span>
-        </div>
-        <div className="flex gap-1 border-l border-[rgba(244,236,226,0.08)] pl-2">
-          {DEV_HOUSE_FLOORS.map((f) => {
-            const isCurrent = currentFloorNum === f.floorNumber;
-            const isComingSoon = f.floorNumber === 3;
-            return (
-              <button
-                key={f.floorNumber}
-                type="button"
-                onClick={() => handleElevatorRide(f.floorNumber)}
-                className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-mono text-[11px] font-bold transition-all ${
-                  isCurrent
-                    ? 'bg-[#d98b4d] text-[#17130f] shadow-md scale-105'
-                    : 'text-[#8a7a6b] hover:text-[#f4ece2] hover:bg-[#262019]'
-                }`}
-                title={`${f.name} - ${f.sublabel} (Press ${f.floorNumber})`}
-              >
-                <span>{f.floorNumber}F</span>
-                {isComingSoon && (
-                  <span className="rounded bg-[#f59e0b]/20 px-1 py-0.2 text-[9px] text-[#f59e0b]">
-                    Coming Soon
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       {/* Quick Navigation HUD Overlay */}
       <div className="pointer-events-none absolute bottom-3 left-3 z-20 flex items-center gap-2 rounded-lg border border-[rgba(244,236,226,0.08)] bg-[#17130f]/80 px-3 py-1.5 backdrop-blur-sm">
         <span className="font-mono text-[9px] uppercase tracking-wider text-[#8a7a6b]">
-          WASD: <span className="font-bold text-[#f4ece2]">Move</span> • Shift: <span className="font-bold text-[#f4ece2]">Sprint</span> • 1-3: <span className="font-bold text-[#d98b4d]">Floors</span> • Scroll: <span className="font-bold text-[#8fae60]">Zoom Out to Scenery & Cars</span> • Right-Drag: <span className="font-bold text-[#f4ece2]">Orbit</span>
+          WASD: <span className="font-bold text-[#f4ece2]">Move</span> • Shift: <span className="font-bold text-[#f4ece2]">Sprint</span> • Scroll: <span className="font-bold text-[#8fae60]">Zoom Out to Scenery & Cars</span> • Right-Drag: <span className="font-bold text-[#f4ece2]">Orbit</span>
         </span>
       </div>
     </div>
