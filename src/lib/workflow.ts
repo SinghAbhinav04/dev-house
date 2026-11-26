@@ -35,6 +35,7 @@ import {
   type TicketPriority,
   type TicketStatus,
   type TicketType,
+  cleanTags,
 } from './tickets.ts';
 
 export interface WorkflowHost {
@@ -140,6 +141,47 @@ export const OUTLINE_FIRST_INSTRUCTION = [
   '2. Then fill in the sections one at a time with Edit, most important first.',
 ].join('\n');
 
+// ── The team, as the planner sees it ─────────────────────────────────
+
+export interface TeamSeat {
+  slot: string;
+  /** Null when nobody fills the seat this run. */
+  name: string | null;
+  title?: string;
+  model?: string;
+}
+
+const SEAT_DUTIES: Record<string, string> = {
+  planner: 'writes the plan and breaks it into tickets',
+  reviewer: "reviews the plan, then reviews each ticket's branch like a pull request",
+  coder: 'builds the tickets, one branch per ticket',
+  tester: 'asks the coder how to run it, tests every ticket and files bugs',
+  auditor: 'audits the build for security issues',
+  supervisor: 'watches the run and reports to the user',
+};
+
+/** The roster as a short markdown list, empty seats included, so the plan fits the team that exists. */
+export function describeTeam(seats: readonly TeamSeat[]): string {
+  return seats
+    .map((seat) => {
+      const duty = SEAT_DUTIES[seat.slot] ?? '';
+      if (!seat.name) return `- ${seat.slot}: nobody this run — that step is skipped`;
+      const who = [seat.name, seat.title, seat.model].filter(Boolean).join(', ');
+      return `- ${seat.slot}: ${who} — ${duty}`;
+    })
+    .join('\n');
+}
+
+/** Asked of the plan: who on the team does what, in order, with estimates. */
+export function teamSectionInstruction(team: string): string {
+  return [
+    'Your team for this run:',
+    team,
+    '',
+    'plan.md must have a "## Team and tasks" section after the goal: for each member above who has a seat, the tasks they own in build order, each with a rough estimate in minutes of agent time and its priority (P1–P3). Building goes to the coder; dedicated test work (a test plan, a harness) to the tester. Say what the reviewer and auditor will check. Nobody without a seat gets work.',
+  ].join('\n');
+}
+
 // ── Breakdown: plan → tickets ────────────────────────────────────────
 
 export const MAX_BREAKDOWN_TICKETS = 8;
@@ -164,6 +206,8 @@ export const BREAKDOWN_SCHEMA = {
           type: { type: 'string', enum: ['story', 'task'] },
           assignee: { type: 'string', enum: ['coder', 'tester'] },
           priority: { type: 'string', enum: ['p1', 'p2', 'p3'] },
+          estimateMinutes: { type: 'number' },
+          tags: { type: 'array', items: { type: 'string' }, maxItems: 4 },
         },
         required: ['title', 'assignee'],
       },
@@ -179,19 +223,24 @@ export interface BreakdownItem {
   type: 'story' | 'task';
   assignee: 'coder' | 'tester';
   priority: TicketPriority;
+  estimateMinutes?: number;
+  tags: string[];
 }
 
-export function buildBreakdownPrompt(planPath: string): string {
+export function buildBreakdownPrompt(planPath: string, team?: string): string {
   return [
-    `The plan at ${planPath} is approved. Break it into tickets for the team, the way a lead would on a Jira board.`,
+    `The plan at ${planPath} is approved. Break it into tickets for the team, the way a lead would on an Azure DevOps board.`,
     '',
+    ...(team ? ['The team (only members with a seat can be given work):', team, ''] : []),
     `- At most ${MAX_BREAKDOWN_TICKETS} tickets, in the order they should be built.`,
     '- Each is a piece of work someone can finish and show: a story for user-visible behaviour, a task for setup or plumbing.',
     '- "assignee" is "coder" for building and "tester" only for dedicated test work (a test harness, a test plan).',
-    '- Give each 1–4 acceptance criteria a tester could check.',
+    '- Follow the "Team and tasks" section of the plan when it has one.',
+    '- Give each 1–4 acceptance criteria a tester could check, an estimate in minutes of agent time, and 1–4 short tags ("ui", "storage", "drag-drop").',
+    '- The description says what to build and where, in a few sentences; markdown is fine.',
     '- Do not change plan.md.',
     '',
-    'Respond with ONLY a JSON object: {"status": "ready", "tickets": [{"title": "...", "description": "...", "acceptance": ["..."], "type": "story", "assignee": "coder", "priority": "p1"}]}',
+    'Respond with ONLY a JSON object: {"status": "ready", "tickets": [{"title": "...", "description": "...", "acceptance": ["..."], "type": "story", "assignee": "coder", "priority": "p1", "estimateMinutes": 20, "tags": ["ui"]}]}',
   ].join('\n');
 }
 
@@ -212,6 +261,10 @@ export function parseBreakdown(value: unknown): BreakdownItem[] {
       type: e.type === 'task' ? 'task' : 'story',
       assignee: e.assignee === 'tester' ? 'tester' : 'coder',
       priority: e.priority === 'p1' || e.priority === 'p3' ? e.priority : 'p2',
+      ...(typeof e.estimateMinutes === 'number' && e.estimateMinutes > 0
+        ? { estimateMinutes: Math.min(Math.round(e.estimateMinutes), 24 * 60) }
+        : {}),
+      tags: Array.isArray(e.tags) ? cleanTags(e.tags) : [],
     });
     if (items.length >= MAX_BREAKDOWN_TICKETS) break;
   }
@@ -227,6 +280,7 @@ export function fallbackBreakdown(concept: string): BreakdownItem[] {
       type: 'story',
       assignee: 'coder',
       priority: 'p1',
+      tags: [],
     },
   ];
 }

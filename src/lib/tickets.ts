@@ -60,6 +60,34 @@ export interface Ticket {
   updatedAt: string;
   history: TicketHistoryEntry[];
   comments: TicketComment[];
+  /** Labels, like Azure DevOps tags: "ui", "drag-drop", "regression". */
+  tags?: string[];
+  /** Who owns building it, whoever it is assigned to right now (QA, review). */
+  owner?: string | null;
+  /** The planner's estimate of the work, in minutes of agent time. */
+  estimateMinutes?: number;
+  /** The git branch the work was done on: the ticket's pull request. */
+  branch?: TicketBranch;
+  /** The reviewer's verdict on that branch. */
+  review?: TicketReview;
+}
+
+export interface TicketBranch {
+  name: string;
+  /** Commit the branch started from. */
+  base: string;
+  /** Last commit on the branch, once there is one. */
+  head?: string;
+  merged?: boolean;
+  files?: number;
+  additions?: number;
+  deletions?: number;
+}
+
+export interface TicketReview {
+  by: string;
+  verdict: 'approved' | 'changes-requested';
+  time: string;
 }
 
 export const TICKET_PREFIX = 'DH';
@@ -143,6 +171,21 @@ export interface NewTicket {
   reporter: string;
   parentId?: string;
   status?: TicketStatus;
+  tags?: string[];
+  owner?: string | null;
+  estimateMinutes?: number;
+}
+
+/** Tags as a board shows them: lower-case, short, no duplicates, at most 6. */
+export function cleanTags(tags: readonly unknown[] | undefined): string[] {
+  const out: string[] = [];
+  for (const tag of tags ?? []) {
+    if (typeof tag !== 'string') continue;
+    const t = tag.trim().toLowerCase().replace(/\s+/g, '-').slice(0, 24);
+    if (t && !out.includes(t)) out.push(t);
+    if (out.length >= 6) break;
+  }
+  return out;
 }
 
 const MAX_TITLE = 140;
@@ -174,6 +217,9 @@ export function createTicket(
     updatedAt: now,
     history: [{ time: now, by: input.reporter, to: status, note: 'created' }],
     comments: [],
+    tags: cleanTags(input.tags),
+    owner: input.owner ?? input.assignee ?? null,
+    ...(input.estimateMinutes && input.estimateMinutes > 0 ? { estimateMinutes: Math.round(input.estimateMinutes) } : {}),
   };
   return { tickets: [...tickets, ticket], ticket };
 }
@@ -255,6 +301,59 @@ export function commentTicket(
     updatedAt: now,
     comments: [...ticket.comments, { time: now, by, text: body }],
   }));
+}
+
+/** Set the descriptive fields (branch, review, tags…) without touching status or history. */
+export function updateTicketFields(
+  tickets: readonly Ticket[],
+  id: string,
+  patch: Partial<Pick<Ticket, 'branch' | 'review' | 'tags' | 'owner' | 'estimateMinutes'>>,
+  now: string = new Date().toISOString(),
+): Ticket[] {
+  return replace(tickets, id, (ticket) => ({ ...ticket, ...patch, updatedAt: now }));
+}
+
+export interface TicketTimes {
+  createdAt: string;
+  /** First time it went to In Progress. */
+  startedAt?: string;
+  /** Last time it went to Done (cleared if reopened since). */
+  completedAt?: string;
+  /** Time spent In Progress, all stints added up. */
+  activeMs: number;
+  /** Start to done, or start to now while open. */
+  cycleMs?: number;
+  /** Started + estimate, while open. */
+  eta?: string;
+}
+
+/** Azure DevOps-style timings, from the history alone. */
+export function ticketTimes(ticket: Ticket, now: number = Date.now()): TicketTimes {
+  let startedAt: string | undefined;
+  let completedAt: string | undefined;
+  let activeMs = 0;
+  let activeSince: number | null = null;
+  for (const entry of ticket.history) {
+    const t = Date.parse(entry.time);
+    if (entry.from === entry.to && entry.from !== undefined) continue;
+    if (activeSince !== null && entry.to !== 'in-progress') {
+      activeMs += t - activeSince;
+      activeSince = null;
+    }
+    if (entry.to === 'in-progress') {
+      startedAt ??= entry.time;
+      if (activeSince === null) activeSince = t;
+    }
+    completedAt = entry.to === 'done' ? entry.time : undefined;
+  }
+  if (activeSince !== null) activeMs += now - activeSince;
+  const end = completedAt ? Date.parse(completedAt) : now;
+  const cycleMs = startedAt ? end - Date.parse(startedAt) : undefined;
+  const eta =
+    startedAt && !completedAt && ticket.estimateMinutes
+      ? new Date(Date.parse(startedAt) + ticket.estimateMinutes * 60_000).toISOString()
+      : undefined;
+  return { createdAt: ticket.createdAt, startedAt, completedAt, activeMs: Math.max(0, activeMs), cycleMs, eta };
 }
 
 export function findTicket(tickets: readonly Ticket[] | undefined, id: string): Ticket | undefined {
@@ -346,6 +445,7 @@ export function normalizeTickets(value: unknown): Ticket[] {
     history: Array.isArray(t.history) ? t.history : [],
     comments: Array.isArray(t.comments) ? t.comments : [],
     assignee: t.assignee ?? null,
+    tags: cleanTags(t.tags),
   }));
 }
 

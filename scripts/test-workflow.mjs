@@ -78,7 +78,7 @@ test('breakdown parsing is lenient and capped', () => {
     ],
   });
   assert.equal(items.length, MAX_BREAKDOWN_TICKETS);
-  assert.deepEqual(items[0], { title: 'Board UI', description: '', acceptance: [], type: 'story', assignee: 'coder', priority: 'p2' });
+  assert.deepEqual(items[0], { title: 'Board UI', description: '', acceptance: [], type: 'story', assignee: 'coder', priority: 'p2', tags: [] });
   assert.deepEqual(items[1].acceptance, ['x']);
   assert.equal(items[1].assignee, 'tester');
   assert.equal(items[2].assignee, 'coder', 'an unknown assignee falls back to the coder');

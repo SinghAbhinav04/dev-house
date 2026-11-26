@@ -3,6 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+import { PlanMarkdown } from '@/components/plan/PlanViewer';
+
 export interface BriefSubmitResult {
   ok: boolean;
   error?: string;
@@ -138,7 +140,9 @@ export function WhiteboardModal({
               </h3>
               <div className="min-h-[160px] flex-1 overflow-y-auto rounded-xl border border-[rgba(244,236,226,0.1)] bg-[#0d0a08] p-4">
                 {plan.trim() ? (
-                  <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-[#f4ece2]/90">{plan}</pre>
+                  <div className="text-[#e8dccd] [&_h1]:text-[#f4ece2] [&_h2]:text-[#93c5fd] [&_h2]:border-[rgba(244,236,226,0.12)] [&_h3]:text-[#f4ece2]">
+                    <PlanMarkdown content={plan} />
+                  </div>
                 ) : (
                   <p className="text-xs italic text-[#8a7a6b]">
                     No plan yet. Submit your brief and the planner drafts it here while it thinks.

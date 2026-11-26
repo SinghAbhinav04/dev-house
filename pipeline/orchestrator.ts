@@ -87,7 +87,7 @@ import {
   type UsageMeter,
   type UsageBreakdown,
 } from '../src/lib/team/usage.ts';
-import { SLOT_LABELS, type SlotId, type TeamMember } from '../src/lib/team/types.ts';
+import { SLOT_IDS, SLOT_LABELS, type SlotId, type TeamMember } from '../src/lib/team/types.ts';
 import { buildsDir, makeExecutable, openPath } from '../src/lib/platform.ts';
 import { RUN_TOKEN_ENV, startHeartbeat } from '../src/lib/orchestrator-liveness.ts';
 import {
@@ -131,6 +131,16 @@ function requireMember(slot: SlotId): TeamMember {
   const member = memberFor(slot);
   if (!member) throw new Error(`No member is filling the ${slot} slot.`);
   return member;
+}
+
+/** The roster as the planner is shown it: every seat, filled or not. */
+function teamForPlanner(): string {
+  return wf.describeTeam(
+    SLOT_IDS.map((slot) => {
+      const member = memberFor(slot);
+      return { slot, name: member ? member.name : null, title: member?.title, model: member?.model || undefined };
+    }),
+  );
 }
 
 function slotLabel(slot: SlotId): string {
@@ -1865,7 +1875,7 @@ async function runPlanningSteps(aSession: string, options?: { resumeStalled?: bo
         : 'Research is complete. The planner is drafting plan.md now in a dedicated write step so we do not lose the work between research and output.'
     );
 
-    const writeResult = await claude('planner', buildPlanningWritePrompt(projectDir, researchSummary), {
+    const writeResult = await claude('planner', buildPlanningWritePrompt(projectDir, researchSummary, teamForPlanner()), {
       resume: restartWriteFromSummary ? undefined : (aSession || (options?.resumeStalled ? resumeSession : undefined)),
       resumePrompt: buildPlanningWriteResumePrompt(projectDir, researchSummary),
       restartOnStall: restartWriteFromSummary,
@@ -2515,7 +2525,7 @@ async function runBreakdown(aSession: string): Promise<string> {
 
   let items: wf.BreakdownItem[] = [];
   try {
-    const breakdown = await claude('planner', wf.buildBreakdownPrompt(planPath), {
+    const breakdown = await claude('planner', wf.buildBreakdownPrompt(planPath, teamForPlanner()), {
       resume: aSession || sessionFor('planner'),
       jsonSchema: wf.BREAKDOWN_SCHEMA,
     });
@@ -2539,6 +2549,8 @@ async function runBreakdown(aSession: string): Promise<string> {
       reporter: plannerId,
       parentId: plan.id,
       status: 'backlog',
+      tags: item.tags,
+      estimateMinutes: item.estimateMinutes,
     }),
   );
   emit(plannerId, 'coding', 'status', `Created ${created.length} ticket(s) from the plan`);
