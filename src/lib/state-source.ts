@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { EMPTY_RUNTIME, normalizeRuntime } from './pipeline-runtime.ts';
 import { emptyBreakdown, normalizeUsage } from './team/usage.ts';
+import { normalizeBoard, normalizeTickets } from './tickets.ts';
 
 export const BUILDS_DIR = join(homedir(), 'Builds');
 export const STAGING_DIR = join(BUILDS_DIR, '.staging');
@@ -36,6 +37,8 @@ export const EMPTY_STATE = {
   auditFindings: [],
   auditDeployPending: false,
   auditActionInFlight: false,
+  tickets: [],
+  board: {},
 };
 
 const VALID_RESUME_ACTIONS = [
@@ -89,6 +92,8 @@ export function normalizeState(data: Record<string, unknown>) {
     auditFindings: Array.isArray(data.auditFindings) ? data.auditFindings : [],
     auditDeployPending: data.auditDeployPending === true,
     auditActionInFlight: data.auditActionInFlight === true,
+    tickets: normalizeTickets(data.tickets),
+    board: normalizeBoard(data.board),
   };
 }
 

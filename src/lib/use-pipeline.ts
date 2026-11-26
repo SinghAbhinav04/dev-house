@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import type { PipelineRuntimeState } from '@/lib/pipeline-runtime';
+import type { BoardState, Ticket, TicketOp } from '@/lib/tickets';
 
 /**
  * A roster member id. Members are user-authored, so this is any slug — the
@@ -90,6 +91,10 @@ export interface PipelineState {
   auditFindings?: AuditFinding[];
   auditDeployPending?: boolean;
   auditActionInFlight?: boolean;
+  /** Work items for this run, Jira-style. */
+  tickets?: Ticket[];
+  /** What is written on the studio whiteboard: the user's brief and the planner's plan. */
+  board?: BoardState;
 }
 
 export interface PendingApproval {
@@ -132,6 +137,8 @@ const EMPTY_STATE: PipelineState = {
   auditFindings: [],
   auditDeployPending: false,
   auditActionInFlight: false,
+  tickets: [],
+  board: {},
 };
 
 interface UsePipelineOptions {
@@ -337,6 +344,26 @@ export function usePipelineState({ pollInterval = 1500, mode, model }: UsePipeli
     return data.content as string | null;
   }, []);
 
+  const submitBrief = useCallback(async (text: string, start: boolean) => {
+    const res = await fetch('/api/board', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brief: text, start }),
+    });
+    const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+    return { ok: res.ok && data?.ok !== false, ...data } as { ok: boolean; error?: string; started?: boolean };
+  }, []);
+
+  const sendTicketOp = useCallback(async (op: Omit<TicketOp, 'time'>) => {
+    const res = await fetch('/api/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(op),
+    });
+    const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+    return { ok: res.ok && data?.ok !== false, ...data } as { ok: boolean; error?: string; queued?: boolean };
+  }, []);
+
   const resetState = useCallback(async () => {
     const res = await fetch('/api/reset', {
       method: 'POST',
@@ -384,5 +411,7 @@ export function usePipelineState({ pollInterval = 1500, mode, model }: UsePipeli
     sendFindingToC,
     dismissFinding,
     deployAfterAudit,
+    submitBrief,
+    sendTicketOp,
   };
 }
