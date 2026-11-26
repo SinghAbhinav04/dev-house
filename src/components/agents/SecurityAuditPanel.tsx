@@ -16,7 +16,7 @@ const SEVERITY_STYLES: Record<AuditFinding['severity'], { label: string; ring: s
 
 const STATUS_LABELS: Record<AuditFindingStatus, string> = {
   'open':         'Open',
-  'sent-to-c':    'Sent to C',
+  'sent-to-c':    'Sent to the coder',
   're-auditing':  'Re-auditing',
   'resolved':     'Resolved ✓',
   'still-open':   'Still Open',
@@ -33,6 +33,9 @@ const STATUS_COLORS: Record<AuditFindingStatus, string> = {
 };
 
 interface Props {
+  /** Who fills the auditor's seat and the coder's, by name: the panel talks about both. */
+  auditorName: string;
+  coderName: string;
   findings: AuditFinding[];
   chatEvents: PipelineEvent[];
   auditActionInFlight: boolean;
@@ -64,6 +67,8 @@ function formatSummary(findings: AuditFinding[]): string {
 }
 
 export function SecurityAuditPanel({
+  auditorName,
+  coderName,
   findings,
   chatEvents,
   auditActionInFlight,
@@ -130,7 +135,7 @@ export function SecurityAuditPanel({
         isSelected ? 'border-signal-bad' : 'border-[var(--surface-raised)]'
       }`}>
         <div className="flex h-9 w-9 items-center justify-center rounded-[10px] border-2 border-signal-bad text-sm font-bold text-signal-bad shadow-[0_0_16px_rgba(244,63,94,0.25)]" style={{ background: 'var(--surface)' }}>
-          E
+          {auditorName.trim().charAt(0).toUpperCase() || '?'}
         </div>
         <div className="flex-1">
           <div className="text-[13px] font-semibold text-[var(--ink-soft)]">Security Auditor</div>
@@ -148,13 +153,13 @@ export function SecurityAuditPanel({
       >
         {sortedFindings.length === 0 && (
           <div className="py-8 text-center text-[11px] text-[var(--ink-faint)]">
-            {currentPhase === 'security-audit' ? 'No findings yet — E is auditing...' : 'Audit clean — no findings.'}
+            {currentPhase === 'security-audit' ? `No findings yet — ${auditorName} is auditing...` : 'Audit clean — no findings.'}
           </div>
         )}
         <div className="space-y-1.5">
           {sortedFindings.map((f) => {
             const sev = SEVERITY_STYLES[f.severity];
-            const status = STATUS_LABELS[f.status];
+            const status = f.status === 'sent-to-c' ? `Sent to ${coderName}` : STATUS_LABELS[f.status];
             const statusColor = STATUS_COLORS[f.status];
             const inFlight = f.status === 'sent-to-c' || f.status === 're-auditing';
             const canAct = (f.status === 'open' || f.status === 'still-open') && !auditActionInFlight;
@@ -177,7 +182,7 @@ export function SecurityAuditPanel({
                     disabled={!canAct}
                     className="rounded-md bg-accent-cool px-2 py-0.5 text-[10px] font-semibold text-ink transition hover:bg-accent-cool disabled:cursor-not-allowed disabled:bg-[var(--surface-overlay)] disabled:text-[var(--ink-faint)]"
                   >
-                    Send to C
+                    Send to {coderName}
                   </button>
                   <button
                     onClick={() => onDismiss(f.id)}
@@ -196,13 +201,13 @@ export function SecurityAuditPanel({
         </div>
       </div>
 
-      {/* Chat with E */}
+      {/* Chat with the auditor */}
       <div
         className="min-h-0 max-h-[40%] overflow-y-auto border-b border-[var(--surface-raised)] px-2.5 py-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar-thumb]:rounded-sm [&::-webkit-scrollbar-thumb]:bg-[var(--surface-overlay)] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar]:w-[3px]"
         onClick={(e) => e.stopPropagation()}
       >
         {chatEvents.length === 0 && (
-          <p className="py-4 text-center text-[11px] text-ink-faint">Ask E about a finding or its severity.</p>
+          <p className="py-4 text-center text-[11px] text-ink-faint">Ask {auditorName} about a finding or its severity.</p>
         )}
         <div className="space-y-px">
           {chatEvents.map((e, i) => (
@@ -234,7 +239,7 @@ export function SecurityAuditPanel({
                 handleChatSubmit();
               }
             }}
-            placeholder="Ask E about a finding..."
+            placeholder={`Ask ${auditorName} about a finding...`}
             disabled={isSending}
             className="max-h-24 flex-1 rounded-md border border-[var(--surface-overlay)] bg-[var(--surface)] px-2.5 py-1.5 text-xs text-ink placeholder-[var(--ink-faint)] focus:border-signal-bad focus:outline-none disabled:opacity-30"
           />

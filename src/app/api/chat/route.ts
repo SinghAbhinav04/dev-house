@@ -31,6 +31,7 @@ import type { AgentEvent } from '@/lib/cli/decoder';
 import { resolveCli } from '@/lib/cli/registry';
 
 import { getMember, readRoster } from '@/lib/team/roster';
+import { slotNames, type SlotNames } from '@/lib/team/slot-names';
 import { resolveSlot } from '@/lib/team/slots';
 import { memberSpawnOptions } from '@/lib/team/spawn';
 import { SLOT_LABELS, type Roster, type TeamMember } from '@/lib/team/types';
@@ -65,6 +66,11 @@ function resolveChatMember(roster: Roster, agent: string): TeamMember | null {
 /** The member filling the supervisor slot, if the team has one. */
 function supervisorId(roster: Roster): string {
   return resolveSlot(roster, 'supervisor')?.id ?? 'supervisor';
+}
+
+/** What to call whoever fills each seat, for text that talks about the team. */
+function seatNames(roster: Roster): SlotNames {
+  return slotNames((slot) => resolveSlot(roster, slot)?.name);
 }
 
 function roleLabel(roster: Roster, agent: string): string {
@@ -155,7 +161,7 @@ function appendSupervisorFailureAndGuidance(
     text: errorText,
   });
 
-  const recommendation = getSupervisorRecommendation(state, null);
+  const recommendation = getSupervisorRecommendation(state, null, seatNames(readRoster()));
   events.push({
     time: new Date().toISOString(),
     agent: supervisorId(readRoster()),
@@ -529,13 +535,14 @@ function handlePipeline(
           return NextResponse.json({ success: false, error: result.error || 'Could not start pipeline' });
         }
 
+        const names = seatNames(readRoster());
         appendPipelineEvent(result.projectDir!, {
           agent: supervisorId(readRoster()),
           phase: 'concept',
           type: 'status',
           text:
             result.runGoal === 'plan-only'
-              ? `Supervisor started plan-only mode in ${result.securityMode} mode. A will plan, B will review, then the run will pause.`
+              ? `Supervisor started plan-only mode in ${result.securityMode} mode. ${names.planner} will plan, ${names.reviewer} will review, then the run will pause.`
               : `Supervisor started the full build in ${result.securityMode} mode.`,
         });
 
@@ -607,7 +614,7 @@ function handlePipeline(
       if (!state.concept) {
         state.concept = message.trim();
         appendUserEvent(state, agent, message);
-        const reply = buildSupervisorConceptReply(String(state.concept), true);
+        const reply = buildSupervisorConceptReply(String(state.concept), true, seatNames(readRoster()));
         const events = (state.events as Array<Record<string, unknown>>) || [];
         events.push({
           time: new Date().toISOString(),
@@ -672,7 +679,7 @@ function handlePipeline(
   if (member.slot === 'supervisor') {
     const pendingApproval = projectDir !== STAGING_DIR ? readPendingApproval(projectDir) : null;
     finalMessage = [
-      buildSupervisorSnapshot(state, pendingApproval),
+      buildSupervisorSnapshot(state, pendingApproval, seatNames(readRoster())),
       '',
       'Use the live snapshot above as the source of truth for the team state.',
       'Answer as the supervisor/operator for the dev team.',

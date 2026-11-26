@@ -58,6 +58,15 @@ on the same machine.
   pending approval and the run state. Reading them from a shell is still
   allowed.
 
+### Changed
+
+- **Text about the team names its members.** The feed, the supervisor's
+  recommendations and the audit panel still called members by the letters of
+  the old fixed team: "Ask S to start", "Sent plan to B for review", "Send to
+  C". Each now uses the name of the member filling that seat, or the seat's
+  label when it is empty. The prompts the orchestrator writes for one member
+  about another's work do the same.
+
 ### Fixed
 
 - **A run with an auditor can be finished from the page.** The Security Audit
