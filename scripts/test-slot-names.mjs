@@ -12,7 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -181,6 +181,20 @@ for (const fine of [
   "X's fix for F1 broke tests.",
 ]) {
   assert.ok(!LETTER.test(fine), `and leaves "${fine}" alone`);
+}
+
+// The role templates are what a member is told about its teammates. They are
+// prose, and a template cannot know who will fill a seat, so they say "the
+// coder" and "the tester"; the roster each run is given says who that is.
+const rolesDir = join(repoRoot, 'templates', 'roles');
+const roleFiles = readdirSync(rolesDir).filter((name) => name.endsWith('.md'));
+assert.ok(roleFiles.length >= 6, 'the role templates are where they were');
+for (const name of roleFiles) {
+  for (const [index, line] of readFileSync(join(rolesDir, name), 'utf8').split('\n').entries()) {
+    assert.ok(!/`[A-ES]`/.test(line), `templates/roles/${name}:${index + 1} names a teammate by a letter in backticks`);
+    assert.ok(!/\b[A-ES] \((?:Planner|Plan Reviewer|Reviewer|Coder|Tester|Code Reviewer|Security Auditor)/.test(line), `templates/roles/${name}:${index + 1} labels a teammate with a letter`);
+    assert.ok(!LETTER.test(line), `templates/roles/${name}:${index + 1} names a teammate by its old letter: "${line.slice(0, 80)}"`);
+  }
 }
 
 // Each caller hands over the names it has.
