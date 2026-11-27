@@ -251,6 +251,7 @@ The probes that captured them are checked in too:
 node scripts/probe-antigravity.mjs    # spawns real turns; spends tokens
 node scripts/probe-opencode.mjs
 node scripts/probe-api-guard.mjs      # needs a running server; spends nothing
+node scripts/probe-gate-diff.mjs      # this gate against an earlier one; spends nothing
 ```
 
 ### CI and releases
