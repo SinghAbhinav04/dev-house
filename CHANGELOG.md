@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- **A "more below" arrow on every scrolling pane.** A pane with content below
+  its fold, the page included, now shows a round down-arrow at its bottom. One
+  click scrolls that pane to the end, and the arrow goes away once nothing is
+  left below. The Start button and the chat box could both sit below a fold
+  with nothing on screen saying so.
+
 ### Security
 
 All four fixes below were reported and contributed by Julius Smith
@@ -57,6 +65,15 @@ on the same machine.
   Edit block on `pipeline-*.json` now has a Bash counterpart for the grant, the
   pending approval and the run state. Reading them from a shell is still
   allowed.
+
+### Changed
+
+- **Text about the team names its members.** The feed, the supervisor's
+  recommendations and the audit panel still called members by the letters of
+  the old fixed team: "Ask S to start", "Sent plan to B for review", "Send to
+  C". Each now uses the name of the member filling that seat, or the seat's
+  label when it is empty. The prompts the orchestrator writes for one member
+  about another's work do the same.
 
 ### Fixed
 

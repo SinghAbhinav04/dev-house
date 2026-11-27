@@ -394,9 +394,9 @@ const agentSpeechPool: Partial<Record<WorkerId, Record<string, string[]>>> = {
   auditor: {
     concept: ['Just chillin\'.', 'Eyes on the screen.', 'Standing by.'],
     planning: ['Watching how this plan shapes up.', 'Letting the team cook.'],
-    'plan-review': ['Watching B poke holes.', 'Standing by.'],
-    coding: ['Standing by until the build is testable.', 'Watching C build.'],
-    'code-review': ['Letting D do their pass first.', 'Almost my turn.'],
+    'plan-review': ['Watching the reviewer poke holes.', 'Standing by.'],
+    coding: ['Standing by until the build is testable.', 'Watching the coder build.'],
+    'code-review': ['Letting the tester do their pass first.', 'Almost my turn.'],
     testing: ['Tests almost done. My turn next.', 'Sharpening my checklist.'],
     'security-audit': ['OWASP sweep in progress.', 'Reading every file.', 'Looking for real exploits, not noise.', 'Severity calls coming up.'],
     deploy: ['Audit done. Heading back to the sofa.'],

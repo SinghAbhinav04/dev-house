@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
+import { ScrollDownHints } from '@/components/shared/ScrollDownHints';
 import { readRoster } from '@/lib/team/roster';
 
 const geistSans = Geist({
@@ -44,6 +45,8 @@ export default function RootLayout({
         <div className="min-h-screen bg-surface text-ink">
           <main>{children}</main>
         </div>
+        {/* One floating "more below" arrow per scrolling pane, on every page. */}
+        <ScrollDownHints />
       </body>
     </html>
   );

@@ -75,7 +75,9 @@ const idleFailureSnapshot = buildSupervisorSnapshot(
   null
 );
 
-assert.match(idleFailureSnapshot, /Tell S what to build/i);
+// With no roster given the seat's label stands in; scripts/test-slot-names.mjs
+// covers the names.
+assert.match(idleFailureSnapshot, /Tell Supervisor what to build/i);
 assert.doesNotMatch(idleFailureSnapshot, /Something needs attention/i);
 
 const codingUpdate = getSupervisorUpdate(
@@ -230,7 +232,7 @@ const awaitingDecisionSnapshot = buildSupervisorSnapshot(
 assert.match(awaitingDecisionSnapshot, /Audit findings: 3 \(1 critical, 1 high, 1 low\)/);
 assert.match(awaitingDecisionSnapshot, /Audit action in flight: no/);
 assert.match(awaitingDecisionSnapshot, /findings are waiting on your review/i);
-assert.match(awaitingDecisionSnapshot, /Send to C to fix, or Dismiss/);
+assert.match(awaitingDecisionSnapshot, /Send to Coder to fix, or Dismiss/);
 
 // In-flight fix pass — supervisor should describe the scoped fix in progress.
 const inFlightSnapshot = buildSupervisorSnapshot(
