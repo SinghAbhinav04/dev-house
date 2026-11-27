@@ -74,6 +74,11 @@ on the same machine.
   C". Each now uses the name of the member filling that seat, or the seat's
   label when it is empty. The prompts the orchestrator writes for one member
   about another's work do the same.
+- **The role templates name teammates by role.** `templates/roles/*.md`, the
+  prompts a new member starts from, still said "Receive the code from `C`" and
+  "send the final result to `A`". They now say "the coder" and "the planner";
+  the roster each run is given says who that is. Templates already copied into
+  `~/.hackeroom`, and roles written from them, are not rewritten.
 
 ### Fixed
 
