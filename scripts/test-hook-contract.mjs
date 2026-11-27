@@ -579,6 +579,44 @@ const checks = [
           run: () => invokeHook({ agent: 'rex', toolName: 'Write', toolInput: { file_path: '.squad/memory/inbox\\note.md', content: 'x' } }),
         },
       ]),
+  // Windows only: a drive letter without a separator after it is relative to
+  // that drive's own current directory, not to the cwd, and a ":" after the
+  // root names an alternate data stream. The text the gate would glue onto
+  // the cwd is not where Windows writes.
+  ...(process.platform === 'win32'
+    ? [
+        {
+          name: 'a drive-relative path is not a path inside the project',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'D:evil\\x.txt', content: 'x' } }),
+        },
+        {
+          name: 'nor on the drive the project is on',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: `${projectDir.slice(0, 2)}newdir\\x.txt`, content: 'x' } }),
+        },
+        {
+          name: 'nor on a drive that is not there',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'Q:nowhere\\x.txt', content: 'x' } }),
+        },
+        {
+          name: 'an alternate data stream on a new path is refused',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: 'newdir\\a.txt:hidden', content: 'x' } }),
+        },
+        {
+          name: 'and on an existing file, by absolute path',
+          expect: 'deny',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: `${join(projectDir, 'index.html')}:hidden`, content: 'x' } }),
+        },
+        {
+          name: 'mixed separators into a new directory are still an ordinary path',
+          expect: 'allow',
+          run: () => invokeHook({ agent: 'reacty', toolName: 'Write', toolInput: { file_path: `${projectDir}\\public/js/app.js`, content: 'x' } }),
+        },
+      ]
+    : []),
   {
     name: 'project-write member cannot touch .claude/',
     expect: 'deny',

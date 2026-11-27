@@ -96,6 +96,12 @@ on the same machine.
   project whose target does not exist yet looked like an ordinary new file, so
   the gate allowed the write and the write created the target, wherever it
   pointed. Present in the shell gate as well.
+- **On Windows, a drive-relative path or a stream name is refused.** `D:x\y`
+  is relative to drive D's own current directory, not to the project, and a
+  `:` after the root names an NTFS alternate data stream (`index.html:hidden`).
+  The gate read both as ordinary paths inside the project. A drive-relative
+  path was refused only by accident, as a missing directory, until missing
+  directories were allowed; a stream on an existing file was allowed already.
 
 ### Upgrading
 

@@ -207,6 +207,17 @@ function resolveFilePath(filePath, cwd) {
   let fp = isAbsolute(filePath) ? filePath : `${cwd}${sep}${filePath}`;
   // Reject .. anywhere, before normalisation can hide it.
   if (fp.includes('..')) return null;
+  if (IS_WINDOWS) {
+    // "D:x\y" is not relative to the cwd: it is x\y under drive D's own
+    // current directory, so gluing it onto the cwd describes a path Windows
+    // will not write to. It used to be refused only because "<cwd>\D:x" is
+    // never a directory; now that a missing directory is climbed past, it
+    // has to be refused by name.
+    if (/^[A-Za-z]:(?![\\/])/.test(filePath)) return null;
+    // A ":" after the root names an NTFS alternate data stream (a.txt:hidden),
+    // or is not a valid name at all. Neither is a file the text can vouch for.
+    if (fp.slice(parse(fp).root.length).includes(':')) return null;
+  }
   // Resolve directory symlinks.
   //
   // The directory does not have to exist yet: Write creates missing parents,
