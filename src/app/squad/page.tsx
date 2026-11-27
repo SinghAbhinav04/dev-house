@@ -8,6 +8,7 @@ import { MarkdownText } from '@/components/shared/MarkdownText';
 import { ArtifactCard, PlanMarkdown, documentTitle, isLongForm } from '@/components/plan/PlanViewer';
 import { getExecutionPathStatus, getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
 import { usePipelineState, type AgentId, type AppMode, type IsolationPolicy, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
+import { slotNames } from '@/lib/team/slot-names';
 import { useTeam } from '@/lib/use-team';
 import { TerminalPane } from '@/components/terminal/TerminalPane';
 import { MODEL_ALIASES, SLOT_LABELS } from '@/lib/team/types';
@@ -78,6 +79,9 @@ export default function SquadPage() {
   const memberName = (id: string) =>
     id === 'system' ? 'System' : members.find((m) => m.id === id)?.name || id;
 
+  /** What to call whoever fills each seat, for text that talks about the team. */
+  const names = slotNames((slot) => members.find((m) => m.slot === slot && m.enabled)?.name);
+
   const memberDescription = (id: string) => {
     const member = members.find((m) => m.id === id);
     if (!member) return '';
@@ -121,8 +125,8 @@ export default function SquadPage() {
   const canContinueApprovedPlan = pipelinePaused && state.currentPhase === 'plan-review';
 
   const visiblePendingApproval = isPipeline ? pendingApproval : null;
-  const supervisorRecommendation = isPipeline ? getSupervisorRecommendation(state, visiblePendingApproval) : null;
-  const supervisorUpdate = isPipeline ? getSupervisorUpdate(state, visiblePendingApproval) : null;
+  const supervisorRecommendation = isPipeline ? getSupervisorRecommendation(state, visiblePendingApproval, names) : null;
+  const supervisorUpdate = isPipeline ? getSupervisorUpdate(state, visiblePendingApproval, names) : null;
   const executionPathStatus = isPipeline ? getExecutionPathStatus(state) : null;
 
   const modePosture = isPipeline

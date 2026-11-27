@@ -1834,7 +1834,7 @@ async function runPlanningSteps(aSession: string, options?: { resumeStalled?: bo
   const resumeSession = aSession || state.runtime.activeTurn?.sessionId || sessionFor('planner');
 
   if (options?.resumeStalled) {
-    emit('system', 'planning', 'status', 'Supervisor resumed A from the saved planning session');
+    emit('system', 'planning', 'status', `Supervisor resumed ${slotLabel('planner')} from the saved planning session`);
     emitSupervisor('planning', 'I resumed the planner from the saved session so we do not have to throw away the research and start over.');
   }
 
@@ -1953,14 +1953,14 @@ async function runPlanReviewRounds(aSession: string, options?: PlanReviewOptions
   setAgent(id('reviewer'), 'active');
 
   if (options?.emitInitialSend !== false) {
-    emit(id('planner'), 'plan-review', 'send', 'Sent plan to B for review');
+    emit(id('planner'), 'plan-review', 'send', `Sent plan to ${slotLabel('reviewer')} for review`);
     emitSupervisor('plan-review', 'The planner handed the plan to the reviewer. We are still before coding, so this is the right place to catch gaps.');
   }
 
   if (options?.resumeStalledSlot === 'planner') {
     setAgent(id('reviewer'), 'idle');
     setAgent(id('planner'), 'active');
-    emit('system', 'plan-review', 'status', 'Supervisor resumed A during plan review');
+    emit('system', 'plan-review', 'status', `Supervisor resumed ${slotLabel('planner')} during plan review`);
     emitSupervisor('plan-review', 'I resumed the planner during review so the plan can keep moving without resetting the whole run.');
 
     const aResume = await claude('planner', buildResumePrompt('planner', 'plan-review'), {
@@ -1970,7 +1970,7 @@ async function runPlanReviewRounds(aSession: string, options?: PlanReviewOptions
     saveSession(id('planner'), aSession);
 
     emit(id('planner'), 'plan-review', 'answer', 'Answered questions and updated plan');
-    emit(id('planner'), 'plan-review', 'send', 'Sent updated plan to B');
+    emit(id('planner'), 'plan-review', 'send', `Sent updated plan to ${slotLabel('reviewer')}`);
     setAgent(id('planner'), 'idle');
     setAgent(id('reviewer'), 'active');
   }
@@ -1980,7 +1980,7 @@ async function runPlanReviewRounds(aSession: string, options?: PlanReviewOptions
       ? buildResumePrompt('reviewer', 'plan-review')
       : options?.resumeStalledSlot === 'planner'
       ? [
-          'A has answered your questions and updated the plan.',
+          `${slotLabel('planner')} has answered your questions and updated the plan.`,
           `Review the updated plan at ${join(projectDir, 'plan.md')} again.`,
           'If you still have concerns, respond with status "questions" and list them.',
           'If the plan is now bulletproof, respond with status "approved".',
@@ -2032,7 +2032,7 @@ async function runPlanReviewRounds(aSession: string, options?: PlanReviewOptions
       if (planStory) wf.comment(workflow, planStory.id, id('reviewer'), question);
     });
 
-    emit(id('reviewer'), 'plan-review', 'send', `Sent ${questions.length} question(s) to A`);
+    emit(id('reviewer'), 'plan-review', 'send', `Sent ${questions.length} question(s) to ${slotLabel('planner')}`);
 
     // Not approving on exhaustion. A reviewer and a planner that cannot agree
     // in five rounds are not one round away from agreeing, and the plan is the
@@ -2050,7 +2050,7 @@ async function runPlanReviewRounds(aSession: string, options?: PlanReviewOptions
     }
 
     setAgent(id('planner'), 'active');
-    emit(id('planner'), 'plan-review', 'receive', `Received ${questions.length} question(s) from B`);
+    emit(id('planner'), 'plan-review', 'receive', `Received ${questions.length} question(s) from ${slotLabel('reviewer')}`);
 
     const aFollowup = await claude('planner', [
       'The reviewer has questions about your plan:',
@@ -2065,12 +2065,12 @@ async function runPlanReviewRounds(aSession: string, options?: PlanReviewOptions
     saveSession(id('planner'), aSession);
 
     emit(id('planner'), 'plan-review', 'answer', 'Answered questions and updated plan');
-    emit(id('planner'), 'plan-review', 'send', 'Sent updated plan to B');
+    emit(id('planner'), 'plan-review', 'send', `Sent updated plan to ${slotLabel('reviewer')}`);
     setAgent(id('planner'), 'idle');
     setAgent(id('reviewer'), 'active');
 
     nextBPrompt = [
-      'A has answered your questions and updated the plan.',
+      `${slotLabel('planner')} has answered your questions and updated the plan.`,
       `Review the updated plan at ${join(projectDir, 'plan.md')} again.`,
       'If you still have concerns, respond with status "questions" and list them.',
       'If the plan is now bulletproof, respond with status "approved".',
@@ -2115,8 +2115,8 @@ async function runSecurityAudit(): Promise<{ paused: boolean }> {
   setPhase('security-audit');
   setPipelineStatus('running');
   setAgent(id('auditor'), 'active');
-  emit(id('tester'), 'security-audit', 'send', 'Sent reviewed and tested code to E for security audit');
-  emit(id('auditor'), 'security-audit', 'receive', 'Received reviewed and tested code from D');
+  emit(id('tester'), 'security-audit', 'send', `Sent reviewed and tested code to ${slotLabel('auditor')} for security audit`);
+  emit(id('auditor'), 'security-audit', 'receive', `Received reviewed and tested code from ${slotLabel('tester')}`);
   emit(id('auditor'), 'security-audit', 'status', 'Auditing for OWASP Top 10, path traversal, ReDoS, missing input validation...');
   emitSupervisor(
     'security-audit',
@@ -2125,7 +2125,7 @@ async function runSecurityAudit(): Promise<{ paused: boolean }> {
 
   const auditPrompt = [
     `Read the locked plan at ${join(projectDir, 'plan.md')}.`,
-    `Then enumerate and read every code file in ${projectDir} that C produced.`,
+    `Then enumerate and read every code file in ${projectDir} that ${slotLabel('coder')} produced.`,
     'Audit statically for the OWASP Top 10, path traversal, ReDoS, and missing input validation on public boundaries.',
     'Only flag real, exploitable vulnerabilities you can point to with a file and line.',
     'Rank each finding by severity: critical / high / medium / low. Calibrate by exploitability and prerequisites, not by general code quality.',
@@ -2225,8 +2225,8 @@ async function runSecurityAudit(): Promise<{ paused: boolean }> {
 async function runDeployStep(aSession: string): Promise<string> {
   setPhase('deploy');
   setAgent(id('planner'), 'active');
-  emit(id('tester'), 'deploy', 'send', 'Sent reviewed + tested code to A');
-  emit(id('planner'), 'deploy', 'receive', 'Received final code from D');
+  emit(id('tester'), 'deploy', 'send', `Sent reviewed + tested code to ${slotLabel('planner')}`);
+  emit(id('planner'), 'deploy', 'receive', `Received final code from ${slotLabel('tester')}`);
   emit(id('planner'), 'deploy', 'status', 'Deploying...');
 
   const aDeployResult = await claude('planner', [
@@ -2286,8 +2286,8 @@ async function runAuditFixPass(findingId: string): Promise<void> {
   finding.history.push({ time: nowIso(), action: 'sent-to-c' });
   setPhase('security-audit');
   setAgent(id('coder'), 'active');
-  emit(id('auditor'), 'security-audit', 'send', `Finding ${finding.id} sent to C for a scoped fix: ${finding.text}`);
-  emitSupervisor('security-audit', `C is applying a scoped fix for finding ${finding.id} (${finding.severity}).`);
+  emit(id('auditor'), 'security-audit', 'send', `Finding ${finding.id} sent to ${slotLabel('coder')} for a scoped fix: ${finding.text}`);
+  emitSupervisor('security-audit', `${slotLabel('coder')} is applying a scoped fix for finding ${finding.id} (${finding.severity}).`);
   flush();
 
   // The coder wrote this code. Resuming is what lets it fix the finding
@@ -2336,7 +2336,7 @@ async function runAuditFixPass(findingId: string): Promise<void> {
     syncFindingTicket(finding);
     finding.history.push({ time: nowIso(), action: 'fix-failed-tests', note: failureNote });
     emit(id('tester'), 'security-audit', 'failure', `Fix for ${finding.id} broke tests: ${failureNote}`);
-    emitSupervisor('security-audit', `C's fix for ${finding.id} broke tests. The finding is back to Open — decide whether to retry, dismiss, or ignore.`);
+    emitSupervisor('security-audit', `${slotLabel('coder')}'s fix for ${finding.id} broke tests. The finding is back to Open — decide whether to retry, dismiss, or ignore.`);
     flush();
     return;
   }
@@ -2345,7 +2345,7 @@ async function runAuditFixPass(findingId: string): Promise<void> {
 
   syncFindingTicket(finding);
   setAgent(id('auditor'), 'active');
-  emit(id('tester'), 'security-audit', 'send', `Fix for ${finding.id} passed tests. Sending to E for re-audit.`);
+  emit(id('tester'), 'security-audit', 'send', `Fix for ${finding.id} passed tests. Sending to ${slotLabel('auditor')} for re-audit.`);
   flush();
 
   // Unlike the first audit, a re-audit must resume: "is this the same
@@ -2388,7 +2388,7 @@ async function runAuditFixPass(findingId: string): Promise<void> {
     finding.text = newText;
     finding.history.push({ time: nowIso(), action: 're-audit-failed', note: newText });
     emit(id('auditor'), 'security-audit', 'issue', `Finding ${finding.id} still open: ${newText}`);
-    emitSupervisor('security-audit', `Finding ${finding.id} is still open after C's fix. Decide whether to retry, dismiss, or ignore.`);
+    emitSupervisor('security-audit', `Finding ${finding.id} is still open after ${slotLabel('coder')}'s fix. Decide whether to retry, dismiss, or ignore.`);
   }
   flush();
 }
@@ -2699,13 +2699,13 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
 
     const dPrompt = dSession
       ? [
-          'C has applied fixes to the code.',
+          `${slotLabel('coder')} has applied fixes to the code.`,
           `Review the code again against the plan at ${join(projectDir, 'plan.md')}`,
           'Respond with ONLY a JSON object: {"status": "approved"} or {"status": "issues", "issues": ["..."]}',
         ].join('\n')
       : [
           `Read the plan at ${join(projectDir, 'plan.md')}`,
-          'Read the code that C wrote.',
+          `Read the code that ${slotLabel('coder')} wrote.`,
           'Check: does the code match the plan? Every item accounted for?',
           '',
           'Respond with ONLY a JSON object: {"status": "approved"} or {"status": "issues", "issues": ["..."]}',
@@ -2769,7 +2769,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       }
 
       setAgent(id('coder'), 'active');
-      emit(id('coder'), 'code-review', 'receive', `Received ${issues.length} issue(s) from D`);
+      emit(id('coder'), 'code-review', 'receive', `Received ${issues.length} issue(s) from ${slotLabel('tester')}`);
 
       moveAll(reviewBugs, ['todo'], 'in-progress', coderId, 'Fixing');
       const cReviewFollowup = await onBranch(reviewBugs, requireMember('coder'), 'code-review', () => claude('coder', [
@@ -2784,7 +2784,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
 
       moveAll(reviewBugs, ['in-progress'], 'in-review', coderId, 'Fix ready for review');
       emit(id('coder'), 'code-review', 'fix', 'Applied fixes');
-      emit(id('coder'), 'code-review', 'send', 'Sent fixed code to D');
+      emit(id('coder'), 'code-review', 'send', `Sent fixed code to ${slotLabel('tester')}`);
       setAgent(id('coder'), 'idle');
     }
   }
@@ -2821,7 +2821,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
           'Respond with ONLY a JSON object: {"status": "passed"} or {"status": "failed", "failures": ["..."]}',
         ].join('\n')
       : [
-          'C has applied fixes for the test failures.',
+          `${slotLabel('coder')} has applied fixes for the test failures.`,
           'Re-test the code.',
           'Respond with ONLY a JSON object: {"status": "passed"} or {"status": "failed", "failures": ["..."]}',
         ].join('\n');
@@ -2883,7 +2883,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       }
 
       setAgent(id('coder'), 'active');
-      emit(id('coder'), 'testing', 'receive', `Received ${failures.length} failure(s) from D`);
+      emit(id('coder'), 'testing', 'receive', `Received ${failures.length} failure(s) from ${slotLabel('tester')}`);
 
       moveAll(qaBugs, ['todo'], 'in-progress', coderId, 'Fixing');
       const cTestFollowup = await onBranch(qaBugs, requireMember('coder'), 'testing', () => claude('coder', [
@@ -2899,7 +2899,7 @@ async function runBuildFromCoding(aSession: string): Promise<{ aSession: string;
       moveAll(qaBugs, ['in-progress'], 'in-qa', coderId, 'Fix ready to retest');
       moveAll(failedStories, ['in-progress'], 'in-qa', coderId, 'Ready to retest');
       emit(id('coder'), 'testing', 'fix', 'Applied fixes');
-      emit(id('coder'), 'testing', 'send', 'Sent fixed code to D');
+      emit(id('coder'), 'testing', 'send', `Sent fixed code to ${slotLabel('tester')}`);
       setAgent(id('coder'), 'done');
     }
   }

@@ -12,6 +12,7 @@ import { auditPanelDue, officeGrid } from '@/lib/office-grid';
 import { canAutoResumeTurn } from '@/lib/pipeline-runtime';
 import { getExecutionPathStatus, getSupervisorRecommendation, getSupervisorUpdate } from '@/lib/pipeline-supervisor';
 import { usePipelineState, type AgentId, type AppMode, type IsolationPolicy, type PermissionMode, type RunGoal, type SecurityMode } from '@/lib/use-pipeline';
+import { slotNames } from '@/lib/team/slot-names';
 import { useTeam } from '@/lib/use-team';
 import { MODEL_ALIASES, SLOT_LABELS } from '@/lib/team/types';
 
@@ -69,6 +70,9 @@ export default function PipelinePage() {
 
   const memberName = (id: string) =>
     id === 'system' ? 'System' : members.find((m) => m.id === id)?.name || id;
+
+  /** What to call whoever fills each seat, for text that talks about the team. */
+  const names = slotNames((slot) => members.find((m) => m.slot === slot && m.enabled)?.name);
 
   /** A member's own colour, so the feed and the office agree on who is who. */
   const memberColor = (id: string) => members.find((m) => m.id === id)?.color || '';
@@ -399,8 +403,8 @@ export default function PipelinePage() {
     canAutoResumeTurn(activeTurn.agent, activeTurn.phase)
   );
   const canContinueApprovedPlan = pipelinePaused && phase === 'plan-review' && !!state.events.some((event) => event.text.includes('PLAN APPROVED'));
-  const supervisorRecommendation = isPipeline ? getSupervisorRecommendation(state, pendingApproval) : null;
-  const supervisorUpdate = isPipeline ? getSupervisorUpdate(state, pendingApproval) : null;
+  const supervisorRecommendation = isPipeline ? getSupervisorRecommendation(state, pendingApproval, names) : null;
+  const supervisorUpdate = isPipeline ? getSupervisorUpdate(state, pendingApproval, names) : null;
   const executionPathStatus = isPipeline ? getExecutionPathStatus(state) : null;
   const modePosture = isPipeline
     ? {
@@ -1025,7 +1029,7 @@ export default function PipelinePage() {
                   </div>
                   <span className="text-[10px] text-ink-faint">
                     {selectedSecurityMode === 'strict'
-                      ? 'Every C/D Bash call needs approval'
+                      ? `Every Bash call by ${names.coder} or ${names.tester} needs approval`
                       : 'Safe Bash auto-runs, risky Bash asks'}
                   </span>
                 </div>
@@ -1110,7 +1114,7 @@ export default function PipelinePage() {
                   </div>
                   <span className="text-[10px] text-ink-faint">
                     {selectedRunGoal === 'plan-only'
-                      ? 'Stop cleanly after B approves the plan'
+                      ? `Stop cleanly after ${names.reviewer} approves the plan`
                       : 'Run the full team from planning through testing'}
                   </span>
                 </div>
@@ -1328,7 +1332,7 @@ export default function PipelinePage() {
           <div>
             {isPipeline && (
               <div className="mb-2 text-[10px] uppercase tracking-wider text-ink-faint">
-                Ask <span className="font-semibold text-signal-ok">S</span> to start, pause, continue, resume, or stop. Buttons are fallback controls, not the main workflow.
+                Ask <span className="font-semibold text-signal-ok">{names.supervisor}</span> to start, pause, continue, resume, or stop. Buttons are fallback controls, not the main workflow.
               </div>
             )}
             <div className="flex gap-2">
@@ -1594,6 +1598,8 @@ export default function PipelinePage() {
         {auditHasStarted && auditorId && (
           <SecurityAuditPanel
             gridColumn={grid.auditColumn}
+            auditorName={names.auditor}
+            coderName={names.coder}
             findings={state.auditFindings || []}
             chatEvents={agentEvents(auditorId)}
             auditActionInFlight={!!state.auditActionInFlight}

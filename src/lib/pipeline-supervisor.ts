@@ -1,5 +1,7 @@
 import type { PendingApproval } from '@/lib/pipeline-approval';
 
+import { SEAT_LABELS, type SlotNames } from './team/slot-names.ts';
+
 interface PipelineEventLike {
   time: string;
   agent: string;
@@ -127,7 +129,9 @@ function hasRecentMatchingEvent(
 
 export function getSupervisorRecommendation(
   state: PipelineStateLike,
-  pendingApproval: PendingApproval | null
+  pendingApproval: PendingApproval | null,
+  /** Who fills each seat, so the text can name them. Seat labels when not given. */
+  names: SlotNames = SEAT_LABELS
 ): SupervisorRecommendation {
   const activeTurn = state.runtime?.activeTurn;
   const latestFailure = findLatestEvent(state.events, ['failure', 'permission_denied', 'issue']);
@@ -152,7 +156,7 @@ export function getSupervisorRecommendation(
   ) {
     return {
       title: 'Plan approved, waiting on you',
-      detail: 'B approved the plan and the run paused cleanly before coding. Continue when you want C to start building.',
+      detail: `${names.reviewer} approved the plan and the run paused cleanly before coding. Continue when you want ${names.coder} to start building.`,
       actionLabel: 'Continue build',
       chatCommand: 'continue build',
       severity: 'info',
@@ -193,7 +197,7 @@ export function getSupervisorRecommendation(
   ) {
     return {
       title: 'Run is moving normally',
-      detail: 'The team is still before coding. If you want to pause after B approves the plan, ask S to stop after review.',
+      detail: `The team is still before coding. If you want to pause after ${names.reviewer} approves the plan, ask ${names.supervisor} to stop after review.`,
       actionLabel: 'Stop after review',
       chatCommand: 'stop after review',
       severity: 'info',
@@ -212,7 +216,7 @@ export function getSupervisorRecommendation(
   if (state.pipelineStatus === 'idle' && state.concept) {
     return {
       title: 'Concept captured',
-      detail: 'The idea is staged and ready. Tell S to start planning or start the full build when you are ready.',
+      detail: `The idea is staged and ready. Tell ${names.supervisor} to start planning or start the full build when you are ready.`,
       actionLabel: 'Start planning',
       chatCommand: 'start planning',
       severity: 'info',
@@ -222,16 +226,16 @@ export function getSupervisorRecommendation(
   if (state.pipelineStatus === 'failed' || (latestFailure && state.pipelineStatus !== 'idle')) {
     return {
       title: 'Something needs attention',
-      detail: latestFailure?.text || 'The last run surfaced an issue. Ask S what happened or stop/reset the run if it is wedged.',
-      actionLabel: 'Ask S what happened',
+      detail: latestFailure?.text || `The last run surfaced an issue. Ask ${names.supervisor} what happened or stop/reset the run if it is wedged.`,
+      actionLabel: `Ask ${names.supervisor} what happened`,
       chatCommand: 'What went wrong, and what should we do next?',
       severity: 'warning',
     };
   }
 
   return {
-    title: 'Tell S what to build',
-    detail: 'No run is active yet. Describe the build to S, then start planning when the concept looks right.',
+    title: `Tell ${names.supervisor} what to build`,
+    detail: `No run is active yet. Describe the build to ${names.supervisor}, then start planning when the concept looks right.`,
     actionLabel: 'Describe concept',
     severity: 'neutral',
   };
@@ -282,10 +286,11 @@ export function getExecutionPathStatus(state: PipelineStateLike): ExecutionPathS
 
 export function getSupervisorUpdate(
   state: PipelineStateLike,
-  pendingApproval: PendingApproval | null
+  pendingApproval: PendingApproval | null,
+  names: SlotNames = SEAT_LABELS
 ): SupervisorUpdate {
   const activeTurn = state.runtime?.activeTurn;
-  const recommendation = getSupervisorRecommendation(state, pendingApproval);
+  const recommendation = getSupervisorRecommendation(state, pendingApproval, names);
   const recentHostFallback = hasRecentMatchingEvent(
     state.events,
     (event) => event.type === 'status' && /retrying on the host/i.test(event.text),
@@ -378,7 +383,7 @@ export function getSupervisorUpdate(
       if (state.auditActionInFlight) {
         return {
           title: 'A scoped security fix is running',
-          summary: 'Per your request, C is applying a scoped fix, then D verifies the tests, then E re-audits just that finding. Other action buttons are disabled until this pass finishes.',
+          summary: `Per your request, ${names.coder} is applying a scoped fix, then ${names.tester} verifies the tests, then ${names.auditor} re-audits just that finding. Other action buttons are disabled until this pass finishes.`,
           ask: 'No action needed — wait for the finding card to update.',
           severity: 'info',
         };
@@ -386,7 +391,7 @@ export function getSupervisorUpdate(
       return {
         title: 'The auditor is doing the initial security pass',
         summary: 'Tests passed. The auditor is reading the code statically for OWASP Top 10, path traversal, ReDoS, and missing input validation. When done, the pipeline will pause so you can review findings and decide what to do.',
-        ask: 'No action needed yet. You will review findings in the Security Audit panel once E finishes.',
+        ask: `No action needed yet. You will review findings in the Security Audit panel once ${names.auditor} finishes.`,
         severity: 'info',
       };
     }
@@ -397,7 +402,7 @@ export function getSupervisorUpdate(
     if (state.auditActionInFlight) {
       return {
         title: 'A scoped security fix is running',
-        summary: `C is applying a scoped fix, D is verifying tests, and E will re-audit that finding. ${summary.total} finding${summary.total === 1 ? '' : 's'} total.`,
+        summary: `${names.coder} is applying a scoped fix, ${names.tester} is verifying tests, and ${names.auditor} will re-audit that finding. ${summary.total} finding${summary.total === 1 ? '' : 's'} total.`,
         ask: 'No action needed — the finding card will update when the pass finishes.',
         severity: 'info',
       };
@@ -413,9 +418,9 @@ export function getSupervisorUpdate(
     const unresolved = summary.statusBreakdown.open + summary.statusBreakdown.inFlight;
     return {
       title: 'Audit findings are waiting on your review',
-      summary: `E reported ${summary.total} finding${summary.total === 1 ? '' : 's'} (${summary.severitySummary}). Resolved: ${summary.statusBreakdown.resolved}. Dismissed: ${summary.statusBreakdown.dismissed}. Open: ${summary.statusBreakdown.open}.`,
+      summary: `${names.auditor} reported ${summary.total} finding${summary.total === 1 ? '' : 's'} (${summary.severitySummary}). Resolved: ${summary.statusBreakdown.resolved}. Dismissed: ${summary.statusBreakdown.dismissed}. Open: ${summary.statusBreakdown.open}.`,
       ask: unresolved > 0
-        ? 'Decide per finding: Send to C to fix, or Dismiss. When done, click "Deploy now".'
+        ? `Decide per finding: Send to ${names.coder} to fix, or Dismiss. When done, click "Deploy now".`
         : 'Everything is handled. Click "Deploy now" when you are ready.',
       severity: unresolved > 0 ? 'warning' : 'info',
     };
@@ -458,11 +463,12 @@ export function getSupervisorUpdate(
 
 export function buildSupervisorSnapshot(
   state: PipelineStateLike,
-  pendingApproval: PendingApproval | null
+  pendingApproval: PendingApproval | null,
+  names: SlotNames = SEAT_LABELS
 ): string {
   const activeTurn = state.runtime?.activeTurn;
-  const recommendation = getSupervisorRecommendation(state, pendingApproval);
-  const update = getSupervisorUpdate(state, pendingApproval);
+  const recommendation = getSupervisorRecommendation(state, pendingApproval, names);
+  const update = getSupervisorUpdate(state, pendingApproval, names);
   const executionPath = getExecutionPathStatus(state);
 
   return [
