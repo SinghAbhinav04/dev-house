@@ -102,13 +102,23 @@ function world() {
   writeFileSync(join(proj, 'plan.md'), 'x');
   writeFileSync(join(proj, 'src', 'a.js'), 'x');
   writeFileSync(join(outside, 'target.txt'), 'x');
-  symlinkSync(outside, join(proj, 'outlink'));
-  symlinkSync(sib, join(proj, 'siblink'));
-  symlinkSync(join(home, 'nowhere'), join(proj, 'dangling'));
-  symlinkSync(join(outside, 'not-there-yet.txt'), join(proj, 'danglefile'));
-  symlinkSync(join(outside, 'target.txt'), join(proj, 'filelink'));
-  symlinkSync(join(proj, 'index.html'), join(proj, 'innerlink'));
-  symlinkSync(join(proj, '.claude'), join(proj, 'cfg'));
+  // As in the contract suite: Windows hands out junctions freely but wants a
+  // privilege for a true symlink, so the links that stand for directories are
+  // junctions there (the type is ignored elsewhere). A link to a file has no
+  // such form. Without it those paths are plain missing files, which both
+  // gates still judge, just not as links.
+  symlinkSync(outside, join(proj, 'outlink'), 'junction');
+  symlinkSync(sib, join(proj, 'siblink'), 'junction');
+  symlinkSync(join(home, 'nowhere'), join(proj, 'dangling'), 'junction');
+  symlinkSync(join(proj, '.claude'), join(proj, 'cfg'), 'junction');
+  try {
+    symlinkSync(join(outside, 'not-there-yet.txt'), join(proj, 'danglefile'), 'file');
+    symlinkSync(join(outside, 'target.txt'), join(proj, 'filelink'), 'file');
+    symlinkSync(join(proj, 'index.html'), join(proj, 'innerlink'), 'file');
+  } catch (error) {
+    if (process.platform !== 'win32' || error?.code !== 'EPERM') throw error;
+    console.error('*** This Windows account cannot create symlinks to files; danglefile, filelink and innerlink are tested as paths that do not exist.');
+  }
   return { root, home, builds, proj, sib, outside };
 }
 
