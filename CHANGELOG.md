@@ -91,6 +91,34 @@ on the same machine.
   with its content until every other panel, the supervisor's chat box included,
   had no height. The grid now declares as many rows as its workers need, the
   supervisor is pinned to the first column and the audit panel to the last.
+- **A member can write into a directory that does not exist yet.** The gate
+  resolved a path through its parent directory and refused the write as
+  "Invalid file path" when that directory was missing, although Write creates
+  missing parents itself. A coder asked for `public/js/app.js` in a new project
+  could only get there by running `mkdir -p` through Bash first, which in
+  strict mode cost the user an approval for each directory. The gate now
+  resolves the nearest ancestor that exists and keeps the rest as written.
+  It still refuses a path through anything that exists without being a
+  directory (a file, a dangling symlink, a symlink to a file) and a `.` or
+  `..` among the missing components, and every rule that follows is unchanged.
+- **The gate compares paths the way the filesystem does.** Paths were
+  lowercased, and every backslash read as a separator, before the gate asked
+  whether a write was inside `~/Builds`, the project or the memory inbox. On
+  Linux neither is true: a member jailed to its project could write the file
+  `proj\evil.txt` beside it, and a member with no write access could write
+  beside the memory inbox. Both comparisons now fold only what the filesystem
+  folds. A relative path containing `..` is refused again, as it was before
+  the gate moved to Node.
+- **A write through a symlink to nowhere is refused.** A symlink in the
+  project whose target does not exist yet looked like an ordinary new file, so
+  the gate allowed the write and the write created the target, wherever it
+  pointed. Present in the shell gate as well.
+- **On Windows, a drive-relative path or a stream name is refused.** `D:x\y`
+  is relative to drive D's own current directory, not to the project, and a
+  `:` after the root names an NTFS alternate data stream (`index.html:hidden`).
+  The gate read both as ordinary paths inside the project. A drive-relative
+  path was refused only by accident, as a missing directory, until missing
+  directories were allowed; a stream on an existing file was allowed already.
 
 ### Upgrading
 

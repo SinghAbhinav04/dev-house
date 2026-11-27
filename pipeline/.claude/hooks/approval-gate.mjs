@@ -51,9 +51,9 @@
 // via indirect execution (python3 -c, eval, base64). For true isolation, use
 // OS-level sandboxing. See SECURITY.md.
 
-import { existsSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -97,17 +97,65 @@ function realOr(path) {
 }
 
 /**
- * Case-folded and with one separator, for comparisons only. The shell version
- * always lowercased (the filesystem under ~/Builds is usually
- * case-insensitive); Windows also mixes separators.
+ * With one separator, on the platform that has two. On POSIX a backslash is an
+ * ordinary character in a name: `proj\\x` is a file beside `proj`, not one
+ * inside it, and reading it as a separator let a jailed member write there.
  */
-function fold(path) {
-  return path.replace(/\\/g, '/').toLowerCase();
+function slashes(path) {
+  return IS_WINDOWS ? path.replace(/\\/g, '/') : path;
 }
 
-function isInside(childFolded, parentFolded) {
-  const base = parentFolded.endsWith('/') ? parentFolded : `${parentFolded}/`;
-  return childFolded.startsWith(base);
+/**
+ * Lowercased as well, for the rules that REFUSE: a config directory or a
+ * control file is caught under any capitalisation, on every filesystem. Too
+ * strict where case matters is the safe way to be wrong.
+ */
+function fold(path) {
+  return slashes(path).toLowerCase();
+}
+
+/**
+ * Whether two names that differ only in case are the same file here. Asked of
+ * a directory that exists.
+ *
+ * The rules that PERMIT (inside ~/Builds, inside the project, inside the memory
+ * inbox) must compare paths the way the filesystem does. Lowercasing always,
+ * as the shell version did, is right on a Mac and wrong on Linux, where
+ * ~/builds/proj is not ~/Builds/proj. It used to be backed up by the refusal
+ * of any path whose directory was missing; now that a new directory is
+ * allowed, a member could otherwise create a whole tree at a differently
+ * capitalised copy of its own project path.
+ *
+ * The test is whether the directory answers to its own name in the other
+ * case, as the same inode. lstat, so a symlink planted under that name does
+ * not count. Anything unexpected reads as "case matters", the stricter answer.
+ */
+function ignoresCase(dir) {
+  if (IS_WINDOWS) return true;
+  let probe = dir;
+  for (;;) {
+    const name = basename(probe);
+    const parent = dirname(probe);
+    const other = name === name.toLowerCase() ? name.toUpperCase() : name.toLowerCase();
+    if (other !== name) {
+      try {
+        const here = lstatSync(probe);
+        const there = lstatSync(join(parent, other));
+        return here.dev === there.dev && here.ino === there.ino;
+      } catch {
+        return false;
+      }
+    }
+    // A name with no letters in it says nothing; ask the directory above.
+    if (parent === probe) return false;
+    probe = parent;
+  }
+}
+
+/** Both arguments in the same form: `fold()`ed, or as `sameAs()` below gives them. */
+function isInside(child, parent) {
+  const base = parent.endsWith('/') ? parent : `${parent}/`;
+  return child.startsWith(base);
 }
 
 function isFile(path) {
@@ -126,6 +174,20 @@ function isDir(path) {
   }
 }
 
+/**
+ * True only when nothing at all is at this path. A dangling symlink is
+ * something (lstat sees the link), and so is anything lstat cannot examine:
+ * an error other than "not there" is not evidence of absence.
+ */
+function isAbsent(path) {
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error) {
+    return error?.code === 'ENOENT' || error?.code === 'ENOTDIR';
+  }
+}
+
 function findProjectRoot(cwd) {
   let check = resolve(cwd);
   const { root } = parse(check);
@@ -140,15 +202,54 @@ function findProjectRoot(cwd) {
 
 /** Absolute, symlink-resolved path, or null when it cannot be trusted. */
 function resolveFilePath(filePath, cwd) {
-  let fp = filePath;
-  if (!isAbsolute(fp)) fp = join(cwd, fp);
+  // Joined by hand: join() would normalise a "." away before the loop below
+  // can see it.
+  let fp = isAbsolute(filePath) ? filePath : `${cwd}${sep}${filePath}`;
   // Reject .. anywhere, before normalisation can hide it.
   if (fp.includes('..')) return null;
-  const dir = dirname(fp);
-  if (!isDir(dir)) return null;
-  fp = join(realOr(dir), basename(fp));
+  if (IS_WINDOWS) {
+    // "D:x\y" is not relative to the cwd: it is x\y under drive D's own
+    // current directory, so gluing it onto the cwd describes a path Windows
+    // will not write to. It used to be refused only because "<cwd>\D:x" is
+    // never a directory; now that a missing directory is climbed past, it
+    // has to be refused by name.
+    if (/^[A-Za-z]:(?![\\/])/.test(filePath)) return null;
+    // A ":" after the root names an NTFS alternate data stream (a.txt:hidden),
+    // or is not a valid name at all. Neither is a file the text can vouch for.
+    if (fp.slice(parse(fp).root.length).includes(':')) return null;
+  }
+  // Resolve directory symlinks.
+  //
+  // The directory does not have to exist yet: Write creates missing parents,
+  // and a coder asked for public/js/app.js in a new project was being refused
+  // here as an "invalid path". So climb to the nearest ancestor that does
+  // exist, resolve that, and keep the rest as written - a component that does
+  // not exist cannot be a symlink, so there is nothing in it to resolve.
+  //
+  // Only a component that is truly absent is climbed past. One that exists
+  // without being a directory (a file, a dangling symlink, a symlink to a
+  // file) is refused, as is a "." among the missing ones: neither is a path
+  // anything should be created under, and the rules after this match on the
+  // text.
+  let dir = dirname(fp);
+  const missing = [];
+  while (!isDir(dir)) {
+    if (!isAbsent(dir)) return null;
+    const part = basename(dir);
+    const parent = dirname(dir);
+    // parent === dir is a root that is not there (a Windows drive, say).
+    if (part === '' || part === '.' || parent === dir) return null;
+    missing.unshift(part);
+    dir = parent;
+  }
+  fp = join(realOr(dir), ...missing, basename(fp));
   // File-level symlinks. (Hardlinks are not detected — known limitation.)
-  if (existsSync(fp)) fp = realOr(fp);
+  if (existsSync(fp)) return realOr(fp);
+  // Nothing there, as far as following links goes. If the name itself is a
+  // link, its target is what does not exist yet, and the write would create
+  // that target wherever it points: ~/.bashrc as readily as a file in the
+  // project. existsSync() follows the link, so it cannot tell the two apart.
+  if (!isAbsent(fp)) return null;
   return fp;
 }
 
@@ -309,13 +410,20 @@ async function main() {
     const projectFolded = fold(projectRoot);
     const eventsFile = join(projectRoot, 'pipeline-events.json');
 
-    const inBuilds = isInside(fileFolded, fold(buildsDir));
-    const inPipelineProject = isFile(eventsFile) && isInside(fileFolded, projectFolded);
+    // What a path is compared as when the answer may be "yes, write there":
+    // folded only as far as this filesystem folds it.
+    const caseBlind = ignoresCase(projectRoot);
+    const sameAs = (path) => (caseBlind ? fold(path) : slashes(path));
+    const fileKey = sameAs(filePath);
+    const projectKey = sameAs(projectRoot);
+
+    const inBuilds = isInside(fileKey, sameAs(buildsDir));
+    const inPipelineProject = isFile(eventsFile) && isInside(fileKey, projectKey);
     if (!inBuilds && !inPipelineProject) deny(`Cannot write to ${filePath} — outside the active pipeline project`);
 
     // Jail every member to the project root unless their write level is
     // "builds", which the roster only ever grants to the supervisor slot.
-    if (memberWrite !== 'builds' && !isInside(fileFolded, projectFolded)) {
+    if (memberWrite !== 'builds' && !isInside(fileKey, projectKey)) {
       deny(`Cannot write to ${filePath} — outside current project`);
     }
 
@@ -336,9 +444,9 @@ async function main() {
 
     // Shared-memory inbox: any member may drop a new .md entry directly into
     // it (Write only, never Edit, no nesting). Everything else there is denied.
-    const inboxFolded = fold(join(projectRoot, '.squad', 'memory', 'inbox'));
-    if (isInside(fileFolded, inboxFolded)) {
-      const rel = filePath.replace(/\\/g, '/').slice(inboxFolded.length + 1);
+    const inboxKey = sameAs(join(projectRoot, '.squad', 'memory', 'inbox'));
+    if (isInside(fileKey, inboxKey)) {
+      const rel = slashes(filePath).slice(inboxKey.length + 1);
       if (toolName === 'Write' && /^[A-Za-z0-9._-]+\.md$/.test(rel)) allow();
       deny('The memory inbox only accepts new .md files written directly into it');
     }
